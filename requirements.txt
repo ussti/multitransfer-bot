@@ -1,0 +1,64 @@
+# Telegram Bot Framework
+aiogram==3.4.1
+aiofiles==23.2.1
+
+# Web Automation
+selenium==4.16.0
+undetected-chromedriver==3.5.4
+webdriver-manager==4.0.1
+
+# HTTP Requests
+aiohttp==3.9.1
+httpx==0.25.2
+requests==2.31.0
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.1
+asyncpg==0.29.0
+aiosqlite==0.19.0
+
+# Configuration & Environment
+pyyaml==6.0.1
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+
+# Validation & Data Processing
+phonenumbers==8.13.26
+email-validator==2.1.0
+python-dateutil==2.8.2
+
+# Async Support
+asyncio-mqtt==0.16.1
+aioredis==2.0.1
+
+# Proxy & Network
+aiohttp-socks==0.8.4
+python-socks==2.4.3
+
+# Image Processing (for QR codes)
+pillow==10.1.0
+qrcode==7.4.2
+
+# Logging & Monitoring
+structlog==23.2.0
+colorlog==6.8.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+
+# Development Tools
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.6.0
+
+# Captcha Solving
+twocaptcha==0.1.1
+
+# Utils
+fake-useragent==1.4.0
+user-agent==0.1.10

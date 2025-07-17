@@ -1,0 +1,84 @@
+# MultiTransfer Telegram Bot Configuration
+
+telegram:
+  token: "${BOT_TOKEN}"
+  webhook_url: "${BOT_WEBHOOK_URL}"
+  allowed_updates: ["message", "callback_query", "inline_query"]
+  parse_mode: "HTML"
+  
+database:
+  url: "${DATABASE_URL}"
+  echo: false
+  pool_size: 5
+  max_overflow: 10
+  
+proxy:
+  provider: "${PROXY_PROVIDER}"
+  api_key: "${PROXY_API_KEY}"
+  country: "${PROXY_COUNTRY}"
+  rotation_enabled: "${PROXY_ROTATION_ENABLED}"
+  max_failures_per_proxy: "${PROXY_MAX_FAILURES}"
+  check_interval: 300
+  
+# API-only captcha configuration (без плагина)
+captcha:
+  provider: "${CAPTCHA_PROVIDER}"
+  api_key: "${CAPTCHA_API_KEY}"
+  timeout: "${CAPTCHA_TIMEOUT}"
+  max_attempts: "${CAPTCHA_MAX_ATTEMPTS}"
+  plugin_enabled: false  # Отключаем плагин
+  plugin_path: "plugins"
+  enabled: true
+  
+multitransfer:
+  base_url: "${MULTITRANSFER_BASE_URL}"
+  supported_countries:
+    tajikistan:
+      name: "Таджикистан"
+      currency: "TJS"
+      banks:
+        - korti_milli
+        - azizi_molia
+        - bank_arvand
+        - eskhata_bank
+    georgia:
+      name: "Грузия"
+      currency: "GEL"
+      banks:
+        - bog_bank
+        - tbc_bank
+    kyrgyzstan:
+      name: "Киргизия"
+      currency: "KGS"
+      banks:
+        - optima_bank
+        - demir_bank
+  supported_currencies: ["RUB", "USD", "EUR", "TJS", "KGS", "GEL"]
+  min_amount: "${MULTITRANSFER_MIN_AMOUNT}"
+  max_amount: "${MULTITRANSFER_MAX_AMOUNT}"
+  timeout: "${MULTITRANSFER_TIMEOUT}"
+  
+browser:
+  headless: "${BROWSER_HEADLESS}"
+  window_size: "${BROWSER_WINDOW_SIZE}"
+  page_load_timeout: "${BROWSER_PAGE_LOAD_TIMEOUT}"
+  implicit_wait: "${BROWSER_IMPLICIT_WAIT}"
+  user_agents:
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+  
+logging:
+  level: "${LOG_LEVEL}"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "${LOG_FILE}"
+  max_file_size: "${LOG_MAX_FILE_SIZE}"
+  backup_count: "${LOG_BACKUP_COUNT}"
+  
+railway:
+  port: "${PORT}"
+  environment: "${RAILWAY_ENVIRONMENT}"
+  
+development:
+  debug: "${DEBUG}"
+  development_mode: "${DEVELOPMENT_MODE}"
