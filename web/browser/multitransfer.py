@@ -1,6 +1,6 @@
 """
-OPTIMIZED MultiTransfer.ru Browser Automation
-Оптимизированная автоматизация для быстрой работы (цель: до 30 секунд)
+OPTIMIZED MultiTransfer.ru Browser Automation with SECOND CAPTCHA support
+Оптимизированная автоматизация с поддержкой ВТОРОЙ КАПЧИ (50% случаев)
 """
 
 import logging
@@ -18,7 +18,7 @@ from web.captcha.solver import CaptchaSolver
 logger = logging.getLogger(__name__)
 
 class MultiTransferAutomation:
-    """ОПТИМИЗИРОВАННАЯ автоматизация multitransfer.ru - скорость до 30 секунд"""
+    """ИСПРАВЛЕННАЯ автоматизация multitransfer.ru с поддержкой ВТОРОЙ КАПЧИ"""
     
     def __init__(self, proxy: Optional[Dict[str, Any]] = None, config: Optional[Dict[str, Any]] = None):
         self.proxy = proxy
@@ -221,10 +221,10 @@ class MultiTransferAutomation:
     # ОСНОВНОЙ МЕТОД
     
     async def create_payment(self, payment_data: Dict[str, Any]) -> Dict[str, Any]:
-        """ОПТИМИЗИРОВАННОЕ создание платежа (цель: до 30 секунд)"""
+        """ИСПРАВЛЕННОЕ создание платежа с поддержкой ВТОРОЙ КАПЧИ (цель: до 40 секунд)"""
         start_time = time.time()
         try:
-            logger.info(f"🚀 FAST payment creation: {payment_data['amount']} {payment_data.get('currency_from', 'RUB')}")
+            logger.info(f"🚀 FIXED payment creation: {payment_data['amount']} {payment_data.get('currency_from', 'RUB')}")
             
             # Быстрая настройка драйвера
             driver = await self._setup_driver()
@@ -239,13 +239,15 @@ class MultiTransferAutomation:
             await self._fast_country_and_amount(payment_data)
             await self._fast_fill_forms(payment_data)
             await self._fast_submit_and_captcha()
-            await self._fast_handle_modal()
+            
+            # ИСПРАВЛЕННЫЙ Step 12: Модальное окно "Проверка данных" с ВТОРОЙ КАПЧЕЙ
+            await self._fast_handle_modal_with_second_captcha()
             
             # Извлечение результата
             result = await self._get_payment_result()
             
             total_time = time.time() - start_time
-            logger.info(f"✅ FAST payment completed in {total_time:.1f}s!")
+            logger.info(f"✅ FIXED payment completed in {total_time:.1f}s!")
             return result
             
         except Exception as e:
@@ -415,8 +417,8 @@ class MultiTransferAutomation:
         logger.info("🏃‍♂️ Forms filled FAST!")
     
     async def _fast_submit_and_captcha(self):
-        """БЫСТРАЯ отправка и решение капчи 10-11 (цель: до 35 секунд с капчей)"""
-        logger.info("🏃‍♂️ Fast submit and captcha steps 10-11")
+        """БЫСТРАЯ отправка и решение ПЕРВОЙ капчи 10-11 (цель: до 35 секунд с капчей)"""
+        logger.info("🏃‍♂️ Fast submit and FIRST captcha steps 10-11")
         
         # Шаг 10: Финальная отправка
         buttons = self.find_elements_fast(By.TAG_NAME, "button")
@@ -428,105 +430,591 @@ class MultiTransferAutomation:
         
         await asyncio.sleep(1)  # Ожидание обработки
         
-        # Шаг 11: КРИТИЧЕСКОЕ решение капчи
-        logger.info("🔐 Step 11: CRITICAL CAPTCHA solving")
+        # Шаг 11: КРИТИЧЕСКОЕ решение ПЕРВОЙ капчи
+        logger.info("🔐 Step 11: CRITICAL FIRST CAPTCHA solving")
         captcha_solved = await self.captcha_solver.solve_captcha(self._driver)
         
         if captcha_solved:
-            logger.info("✅ Step 11: CAPTCHA solved successfully")
+            logger.info("✅ Step 11: FIRST CAPTCHA solved successfully")
         else:
-            logger.error("❌ Step 11: CAPTCHA solve FAILED - cannot proceed")
+            logger.error("❌ Step 11: FIRST CAPTCHA solve FAILED - cannot proceed")
             # КРИТИЧЕСКОЕ: если капча не решена - СТОП
-            raise Exception("CAPTCHA solve failed - payment process cannot continue")
+            raise Exception("FIRST CAPTCHA solve failed - payment process cannot continue")
         
-        self.take_screenshot_conditional("fast_captcha_step.png")
+        self.take_screenshot_conditional("fast_first_captcha_solved.png")
     
-    async def _fast_handle_modal(self):
-        """БЫСТРАЯ обработка модального окна Step 12"""
-        logger.info("🏃‍♂️ Fast modal handling step 12")
+    async def _fast_handle_modal_with_second_captcha(self):
+        """
+        ДИАГНОСТИЧЕСКАЯ версия: обработка модального окна с полной диагностикой
+        """
+        logger.info("🏃‍♂️ Step 12: DIAGNOSTIC modal + SECOND CAPTCHA handling")
         
-        await asyncio.sleep(0.5)  # Минимальное ожидание модального окна
+        await asyncio.sleep(2)  # Больше времени для появления модального окна
         
-        # Быстрый поиск модального окна
+        # СТРОГИЙ поиск модального окна "Проверка данных"
+        modal_selectors = [
+            "//div[contains(text(), 'Проверка данных')]",
+            "//*[contains(text(), 'Проверьте данные получателя')]",
+            "//*[contains(text(), 'Проверка данных')]",
+            "//h2[contains(text(), 'Проверка данных')]",
+            "//h3[contains(text(), 'Проверка данных')]"
+        ]
+        
         modal_found = False
-        for selector in self.selectors['data_verification_modal']:
-            element = self.find_element_fast(By.XPATH, selector, timeout=1)
+        modal_element = None
+        for selector in modal_selectors:
+            element = self.find_element_fast(By.XPATH, selector, timeout=3)
             if element and element.is_displayed():
+                logger.info(f"✅ Found 'Проверка данных' modal with selector: {selector}")
                 modal_found = True
+                modal_element = element
                 break
         
         if not modal_found:
-            logger.info("ℹ️ No modal found, continuing...")
+            logger.warning("⚠️ No 'Проверка данных' modal found - this is unexpected after FIRST CAPTCHA")
             return
         
-        logger.info("✅ Modal found, clicking continue...")
+        self.take_screenshot_conditional("step12_modal_found.png")
         
-        # Быстрый клик по кнопке в модальном окне
-        for selector in self.selectors['modal_continue_btn']:
-            element = self.find_element_fast(By.XPATH, selector, timeout=1)
-            if element and element.is_displayed():
-                if self.click_element_fast(element):
-                    logger.info("✅ Step 12: Modal continue clicked")
-                    break
+        # ПРОВЕРКА ВТОРОЙ КАПЧИ
+        logger.info("🔍 CRITICAL: Checking for SECOND CAPTCHA (50% probability)")
+        await self._handle_potential_second_captcha()
         
-        await asyncio.sleep(0.5)
-        self.take_screenshot_conditional("fast_modal_handled.png")
+        # ДИАГНОСТИКА: ПОЛНЫЙ АНАЛИЗ DOM
+        logger.info("🔍 DIAGNOSTIC: Full DOM analysis for modal button")
+        await self._diagnostic_dom_analysis()
+        
+        # ДИАГНОСТИЧЕСКАЯ попытка клика
+        logger.info("🎯 DIAGNOSTIC: Enhanced button finding with full analysis")
+        button_clicked = await self._diagnostic_button_click()
+        
+        if button_clicked:
+            logger.info("✅ DIAGNOSTIC SUCCESS: Modal handled successfully!")
+            await asyncio.sleep(2)
+            self.take_screenshot_conditional("step12_modal_success.png")
+        else:
+            logger.error("❌ DIAGNOSTIC FAILURE: Could not handle modal")
+            self.take_screenshot_conditional("step12_modal_failure.png")
+            raise Exception("DIAGNOSTIC: Failed to handle modal - payment cannot be completed")
+        
+        logger.info("🏃‍♂️ Step 12 DIAGNOSTIC completion - proceeding to result extraction")
+    
+    async def _handle_potential_second_captcha(self):
+        """
+        НОВЫЙ МЕТОД: Обработка потенциальной ВТОРОЙ КАПЧИ (50% случаев)
+        
+        Появляется ПОСЛЕ первой капчи, ПЕРЕД кликом "ПРОДОЛЖИТЬ" в модальном окне.
+        Тип: Yandex Smart Captcha - slider puzzle "Move the slider to complete the puzzle"
+        """
+        logger.info("🔍 CHECKING for potential SECOND CAPTCHA (50% probability)...")
+        
+        # Даем 5 секунд на появление второй капчи
+        start_time = time.time()
+        second_captcha_timeout = 5  # секунд
+        
+        while time.time() - start_time < second_captcha_timeout:
+            await asyncio.sleep(1)  # Проверяем каждую секунду
+            
+            # Ищем индикаторы ВТОРОЙ капчи
+            second_captcha_indicators = [
+                # Yandex Smart Captcha (как на скриншоте)
+                "//div[contains(@class, 'CheckboxCaptcha')]",
+                "//div[contains(@class, 'captcha-checkbox')]", 
+                "//iframe[contains(@src, 'captcha.yandex')]",
+                "//*[contains(@class, 'ya-captcha')]",
+                "//*[contains(@class, 'smart-captcha')]",
+                "//*[contains(text(), 'SmartCaptcha by Yandex')]",
+                "//*[contains(text(), 'SmartCaptcha by Yandex Cloud')]",
+                
+                # Специфичные для slider puzzle (как на скриншоте)
+                "//*[contains(text(), 'Move the slider')]",
+                "//*[contains(text(), 'complete the puzzle')]",
+                "//*[contains(text(), 'Pull to the right')]",
+                "//div[contains(@class, 'slider')]//following-sibling::*[contains(text(), 'puzzle')]",
+                
+                # Generic captcha indicators (на всякий случай)
+                "//div[contains(@class, 'captcha')]",
+                "//*[contains(@id, 'captcha')]",
+                "//*[contains(text(), 'captcha')]"
+            ]
+            
+            second_captcha_found = False
+            for selector in second_captcha_indicators:
+                try:
+                    elements = self.find_elements_fast(By.XPATH, selector)
+                    for element in elements:
+                        if element.is_displayed():
+                            logger.info(f"🚨 SECOND CAPTCHA DETECTED with selector: {selector}")
+                            second_captcha_found = True
+                            break
+                    if second_captcha_found:
+                        break
+                except:
+                    continue
+            
+            if second_captcha_found:
+                logger.info("🔐 CRITICAL: SECOND CAPTCHA found - solving via Anti-Captcha...")
+                self.take_screenshot_conditional("second_captcha_detected.png")
+                
+                # Решаем вторую капчу через тот же CaptchaSolver
+                try:
+                    captcha_solved = await self.captcha_solver.solve_captcha(self._driver)
+                    
+                    if captcha_solved:
+                        logger.info("✅ SECOND CAPTCHA solved successfully!")
+                        self.take_screenshot_conditional("second_captcha_solved.png")
+                        return True
+                    else:
+                        logger.error("❌ SECOND CAPTCHA solve FAILED!")
+                        self.take_screenshot_conditional("second_captcha_failed.png")
+                        # НЕ бросаем исключение - пытаемся продолжить
+                        return False
+                        
+                except Exception as e:
+                    logger.error(f"❌ SECOND CAPTCHA solve error: {e}")
+                    self.take_screenshot_conditional("second_captcha_error.png")
+                    return False
+            
+            # Продолжаем ожидание если капча не найдена
+            logger.debug(f"⏳ Waiting for second captcha... ({int(time.time() - start_time)}s/{second_captcha_timeout}s)")
+        
+        # Таймаут истек
+        logger.info("✅ No SECOND CAPTCHA detected after 5s - proceeding to modal button click")
+        return True
     
     def _generate_phone(self) -> str:
         """Быстрая генерация телефона"""
         return f"+7{random.randint(900, 999)}{random.randint(1000000, 9999999)}"
     
     async def _get_payment_result(self) -> Dict[str, Any]:
-        """БЫСТРОЕ извлечение результата"""
-        logger.info("🔍 Fast result extraction")
+        """СТРОГОЕ извлечение результата с валидацией"""
+        logger.info("🔍 STRICT result extraction with validation")
         
-        await asyncio.sleep(1)  # Минимальное ожидание загрузки
-        self.take_screenshot_conditional("fast_final_result.png")
+        await asyncio.sleep(2)  # Ожидание загрузки
+        self.take_screenshot_conditional("final_result_page.png")
         
         current_url = self._driver.current_url
+        logger.info(f"📍 Current URL: {current_url}")
+        
+        # СТРОГАЯ ПРОВЕРКА: мы должны быть НЕ на главной странице
+        if current_url == self.base_url or current_url == f"{self.base_url}/":
+            logger.error("❌ CRITICAL: Still on homepage - payment process FAILED")
+            return {
+                'success': False,
+                'error': 'Payment process failed - still on homepage',
+                'current_url': current_url
+            }
         
         # Быстрый поиск QR-кода
         qr_code_url = None
         qr_selectors = [
             "//img[contains(@src, 'qr')]",
-            "//img[contains(@alt, 'QR')]"
+            "//img[contains(@alt, 'QR')]",
+            "//canvas[contains(@class, 'qr')]",
+            "//img[contains(@src, 'data:image') and contains(@src, 'qr')]",
+            "//*[contains(@class, 'qr-code')]//img"
         ]
         
         for selector in qr_selectors:
-            element = self.find_element_fast(By.XPATH, selector, timeout=1)
-            if element:
+            element = self.find_element_fast(By.XPATH, selector, timeout=2)
+            if element and element.is_displayed():
                 qr_url = element.get_attribute("src")
-                if qr_url:
+                if qr_url and ('qr' in qr_url.lower() or 'data:image' in qr_url):
                     qr_code_url = qr_url
                     logger.info(f"✅ QR found: {qr_url[:50]}...")
                     break
         
         # Быстрый поиск ссылки на оплату
-        payment_url = current_url
+        payment_url = current_url  # Используем текущий URL как базовый
         payment_selectors = [
             "//a[contains(@href, 'pay')]",
-            "//button[contains(text(), 'Оплатить')]"
+            "//a[contains(@href, 'payment')]",
+            "//button[contains(text(), 'Оплатить')]",
+            "//a[contains(@href, 'checkout')]"
         ]
         
         for selector in payment_selectors:
             element = self.find_element_fast(By.XPATH, selector, timeout=1)
             if element:
                 href = element.get_attribute("href")
-                if href:
+                if href and ('pay' in href or 'payment' in href or 'checkout' in href):
                     payment_url = href
+                    logger.info(f"✅ Payment URL found: {href[:50]}...")
                     break
         
-        success = bool(qr_code_url or payment_url != self.base_url)
+        # СТРОГАЯ ВАЛИДАЦИЯ УСПЕХА
+        success_indicators = {
+            'qr_code_found': bool(qr_code_url),
+            'payment_url_valid': payment_url != self.base_url and payment_url != current_url,
+            'url_changed': current_url != self.base_url,
+            'no_error_messages': await self._check_no_error_messages()
+        }
+        
+        logger.info(f"📊 Success indicators: {success_indicators}")
+        
+        # Определяем успех: QR найден ИЛИ URL изменился И нет ошибок
+        success = (
+            success_indicators['qr_code_found'] or 
+            (success_indicators['url_changed'] and success_indicators['no_error_messages'])
+        )
         
         result = {
             'success': success,
             'qr_code_url': qr_code_url,
             'payment_url': payment_url,
-            'current_url': current_url
+            'current_url': current_url,
+            'validation': success_indicators
         }
         
         if not success:
-            result['error'] = 'No QR code or payment URL found'
+            # Детальная диагностика ошибки
+            error_messages = await self._extract_error_messages()
+            result['error'] = f'Payment result validation failed. Error messages: {error_messages}'
+            result['error_details'] = error_messages
         
-        logger.info(f"📊 FAST result: success={success}")
+        logger.info(f"📊 STRICT result: success={success}")
+        if success:
+            logger.info("✅ Payment process completed successfully!")
+        else:
+            logger.error("❌ Payment process validation FAILED!")
+            
         return result
+    
+    async def _check_no_error_messages(self) -> bool:
+        """Проверка отсутствия сообщений об ошибках"""
+        try:
+            error_selectors = [
+                "//*[contains(@class, 'error')]",
+                "//*[contains(@class, 'alert')]",
+                "//*[contains(@class, 'warning')]",
+                "//*[contains(text(), 'ошибка')]",
+                "//*[contains(text(), 'Ошибка')]",
+                "//*[contains(text(), 'ERROR')]",
+                "//*[contains(text(), 'неверн')]",
+                "//*[contains(text(), 'не удалось')]"
+            ]
+            
+            for selector in error_selectors:
+                elements = self.find_elements_fast(By.XPATH, selector)
+                for element in elements:
+                    if element.is_displayed():
+                        error_text = element.text.strip()
+                        if error_text:
+                            logger.warning(f"⚠️ Error message found: {error_text}")
+                            return False
+            
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Error checking failed: {e}")
+            return True  # Если не можем проверить - считаем что ошибок нет
+    
+    async def _extract_error_messages(self) -> str:
+        """Извлечение текста ошибок для диагностики"""
+        try:
+            error_messages = []
+            error_selectors = [
+                "//*[contains(@class, 'error')]",
+                "//*[contains(@class, 'alert')]",
+                "//*[contains(text(), 'ошибка')]",
+                "//*[contains(text(), 'Ошибка')]"
+            ]
+            
+            for selector in error_selectors:
+                elements = self.find_elements_fast(By.XPATH, selector)
+                for element in elements:
+                    if element.is_displayed():
+                        text = element.text.strip()
+                        if text and text not in error_messages:
+                            error_messages.append(text)
+            
+            return "; ".join(error_messages) if error_messages else "No specific error messages found"
+            
+        except Exception as e:
+            logger.debug(f"Extract error messages failed: {e}")
+            return "Error extracting error messages"
+    
+    async def _diagnostic_dom_analysis(self):
+        """ДИАГНОСТИЧЕСКИЙ анализ DOM для поиска кнопки"""
+        try:
+            logger.info("🔍 DIAGNOSTIC: Starting full DOM analysis...")
+            
+            # 1. Анализ всех кнопок на странице
+            all_buttons_script = """
+            var buttons = document.querySelectorAll('button, input[type="button"], input[type="submit"], a[role="button"]');
+            var buttonData = [];
+            for (var i = 0; i < buttons.length; i++) {
+                var btn = buttons[i];
+                if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {  // Visible elements only
+                    buttonData.push({
+                        index: i,
+                        tagName: btn.tagName,
+                        text: btn.textContent || btn.innerText || btn.value || '',
+                        className: btn.className || '',
+                        id: btn.id || '',
+                        type: btn.type || '',
+                        visible: btn.offsetParent !== null,
+                        enabled: !btn.disabled,
+                        style: btn.getAttribute('style') || ''
+                    });
+                }
+            }
+            return buttonData;
+            """
+            
+            button_data = self._driver.execute_script(all_buttons_script)
+            logger.info(f"🔍 DIAGNOSTIC: Found {len(button_data)} visible buttons")
+            
+            # Логируем все кнопки
+            for i, btn in enumerate(button_data[:20]):  # Первые 20 кнопок
+                logger.info(f"Button {i}: text='{btn['text'][:50]}', class='{btn['className'][:30]}', enabled={btn['enabled']}")
+            
+            # 2. Поиск кнопок с похожим текстом
+            continue_buttons = []
+            for btn in button_data:
+                text = btn['text'].strip().upper()
+                if any(keyword in text for keyword in ['ПРОДОЛЖИТЬ', 'CONTINUE', 'NEXT', 'ДАЛЕЕ', 'OK', 'ГОТОВО']):
+                    continue_buttons.append(btn)
+                    logger.info(f"🎯 DIAGNOSTIC: Found potential continue button: '{btn['text']}' (class: {btn['className']})")
+            
+            # 3. Анализ iframe (может быть модальное окно в iframe)
+            iframe_script = """
+            var iframes = document.querySelectorAll('iframe');
+            var iframeData = [];
+            for (var i = 0; i < iframes.length; i++) {
+                var iframe = iframes[i];
+                iframeData.push({
+                    src: iframe.src || '',
+                    id: iframe.id || '',
+                    className: iframe.className || '',
+                    visible: iframe.offsetParent !== null
+                });
+            }
+            return iframeData;
+            """
+            
+            iframe_data = self._driver.execute_script(iframe_script)
+            if iframe_data:
+                logger.info(f"🔍 DIAGNOSTIC: Found {len(iframe_data)} iframes")
+                for iframe in iframe_data:
+                    logger.info(f"Iframe: src='{iframe['src'][:50]}', class='{iframe['className']}'")
+            
+            # 4. Поиск элементов с событиями клика
+            clickable_script = """
+            var clickableElements = [];
+            var allElements = document.querySelectorAll('*');
+            for (var i = 0; i < allElements.length; i++) {
+                var el = allElements[i];
+                var hasClick = el.onclick || el.getAttribute('onclick') || 
+                              el.addEventListener || window.getComputedStyle(el).cursor === 'pointer';
+                if (hasClick && el.offsetWidth > 0 && el.offsetHeight > 0) {
+                    var text = el.textContent || el.innerText || '';
+                    if (text.includes('ПРОДОЛЖИТЬ') || text.includes('CONTINUE')) {
+                        clickableElements.push({
+                            tagName: el.tagName,
+                            text: text.substring(0, 50),
+                            className: el.className || '',
+                            id: el.id || ''
+                        });
+                    }
+                }
+            }
+            return clickableElements;
+            """
+            
+            clickable_data = self._driver.execute_script(clickable_script)
+            if clickable_data:
+                logger.info(f"🔍 DIAGNOSTIC: Found {len(clickable_data)} clickable continue elements")
+                for el in clickable_data:
+                    logger.info(f"Clickable: {el['tagName']} '{el['text']}' (class: {el['className']})")
+            
+            return {
+                'total_buttons': len(button_data),
+                'continue_buttons': continue_buttons,
+                'iframes': iframe_data,
+                'clickable_elements': clickable_data
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ DIAGNOSTIC DOM analysis error: {e}")
+            return None
+
+    async def _diagnostic_button_click(self) -> bool:
+        """ДИАГНОСТИЧЕСКИЙ поиск и клик кнопки с расширенными методами"""
+        try:
+            logger.info("🎯 DIAGNOSTIC: Starting enhanced button click methods")
+            
+            # Метод 1: Поиск через JavaScript по тексту
+            js_button_click_script = """
+            // Поиск всех элементов содержащих текст продолжить
+            function findContinueButton() {
+                var keywords = ['ПРОДОЛЖИТЬ', 'продолжить', 'Продолжить', 'CONTINUE', 'Continue', 'ДАЛЕЕ', 'далее', 'NEXT'];
+                var allElements = document.querySelectorAll('*');
+                
+                for (var i = 0; i < allElements.length; i++) {
+                    var el = allElements[i];
+                    var text = el.textContent || el.innerText || el.value || '';
+                    
+                    // Проверяем точное совпадение
+                    for (var j = 0; j < keywords.length; j++) {
+                        if (text.trim() === keywords[j] || text.trim().toUpperCase() === keywords[j].toUpperCase()) {
+                            // Проверяем что элемент кликабельный
+                            if ((el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'INPUT') && 
+                                el.offsetWidth > 0 && el.offsetHeight > 0 && !el.disabled) {
+                                return el;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+            
+            var button = findContinueButton();
+            if (button) {
+                button.click();
+                return {success: true, element: button.tagName, text: button.textContent};
+            }
+            return {success: false};
+            """
+            
+            logger.info("🎯 DIAGNOSTIC: Method 1 - JavaScript text search")
+            result = self._driver.execute_script(js_button_click_script)
+            if result.get('success'):
+                logger.info(f"✅ DIAGNOSTIC: Method 1 SUCCESS - clicked {result.get('element')} with text '{result.get('text')}'")
+                await asyncio.sleep(2)
+                
+                # Проверяем успех
+                if await self._check_modal_disappeared():
+                    return True
+            
+            # Метод 2: Координатный клик в правый нижний угол модального окна
+            logger.info("🎯 DIAGNOSTIC: Method 2 - Coordinate click")
+            modal_coordinate_script = """
+            var modalElements = document.querySelectorAll('*');
+            for (var i = 0; i < modalElements.length; i++) {
+                var el = modalElements[i];
+                var text = el.textContent || el.innerText || '';
+                if (text.includes('Проверка данных') || text.includes('Проверьте данные')) {
+                    var rect = el.getBoundingClientRect();
+                    // Клик в правый нижний угол (где обычно кнопки)
+                    var clickX = rect.right - 100;
+                    var clickY = rect.bottom - 30;
+                    
+                    // Создаем событие клика
+                    var event = new MouseEvent('click', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: clickX,
+                        clientY: clickY
+                    });
+                    
+                    // Находим элемент в этих координатах
+                    var targetElement = document.elementFromPoint(clickX, clickY);
+                    if (targetElement) {
+                        targetElement.dispatchEvent(event);
+                        return {success: true, coordinates: [clickX, clickY], target: targetElement.tagName};
+                    }
+                }
+            }
+            return {success: false};
+            """
+            
+            result = self._driver.execute_script(modal_coordinate_script)
+            if result.get('success'):
+                logger.info(f"✅ DIAGNOSTIC: Method 2 SUCCESS - coordinate click at {result.get('coordinates')}")
+                await asyncio.sleep(2)
+                
+                if await self._check_modal_disappeared():
+                    return True
+            
+            # Метод 3: Эмуляция Enter/Space/Escape
+            logger.info("🎯 DIAGNOSTIC: Method 3 - Keyboard events")
+            keyboard_script = """
+            // Пробуем разные клавиши
+            var events = ['Enter', 'Space', 'Escape'];
+            for (var i = 0; i < events.length; i++) {
+                var event = new KeyboardEvent('keydown', {
+                    key: events[i],
+                    code: events[i],
+                    bubbles: true
+                });
+                document.dispatchEvent(event);
+            }
+            return {success: true};
+            """
+            
+            self._driver.execute_script(keyboard_script)
+            await asyncio.sleep(2)
+            
+            if await self._check_modal_disappeared():
+                logger.info("✅ DIAGNOSTIC: Method 3 SUCCESS - keyboard event")
+                return True
+            
+            # Метод 4: Поиск и клик по всем видимым элементам в области модального окна
+            logger.info("🎯 DIAGNOSTIC: Method 4 - Area click")
+            area_click_script = """
+            var modalArea = null;
+            var allElements = document.querySelectorAll('*');
+            
+            // Найти модальное окно
+            for (var i = 0; i < allElements.length; i++) {
+                var el = allElements[i];
+                var text = el.textContent || el.innerText || '';
+                if (text.includes('Проверка данных')) {
+                    modalArea = el;
+                    break;
+                }
+            }
+            
+            if (modalArea) {
+                var clickableInModal = modalArea.querySelectorAll('button, a, input, div[onclick], span[onclick]');
+                for (var j = 0; j < clickableInModal.length; j++) {
+                    var clickable = clickableInModal[j];
+                    if (clickable.offsetWidth > 0 && clickable.offsetHeight > 0) {
+                        clickable.click();
+                        return {success: true, clicked: clickable.tagName, text: clickable.textContent};
+                    }
+                }
+            }
+            return {success: false};
+            """
+            
+            result = self._driver.execute_script(area_click_script)
+            if result.get('success'):
+                logger.info(f"✅ DIAGNOSTIC: Method 4 SUCCESS - area click on {result.get('clicked')}")
+                await asyncio.sleep(2)
+                
+                if await self._check_modal_disappeared():
+                    return True
+            
+            logger.error("❌ DIAGNOSTIC: All methods failed")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ DIAGNOSTIC button click error: {e}")
+            return False
+
+    async def _check_modal_disappeared(self) -> bool:
+        """Проверка исчезновения модального окна"""
+        try:
+            modal_selectors = [
+                "//div[contains(text(), 'Проверка данных')]",
+                "//*[contains(text(), 'Проверьте данные получателя')]"
+            ]
+            
+            for selector in modal_selectors:
+                element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                if element and element.is_displayed():
+                    return False
+            
+            # Также проверяем изменение URL
+            current_url = self._driver.current_url
+            url_changed = current_url != self.base_url
+            
+            logger.info(f"📍 URL check: {current_url}, changed: {url_changed}")
+            return url_changed
+            
+        except Exception as e:
+            logger.debug(f"Modal check error: {e}")
+            return False
