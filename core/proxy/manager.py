@@ -177,7 +177,7 @@ class ProxyManager:
                             # Парсим данные прокси
                             for proxy_id, proxy_info in data.get('list', {}).items():
                                 proxy_data = {
-                                    'id': proxy_id,
+                                    'id': proxy_info.get('id'),
                                     'ip': proxy_info.get('host'),
                                     'port': proxy_info.get('port'),
                                     'user': proxy_info.get('user'),
