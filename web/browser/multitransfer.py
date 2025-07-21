@@ -428,14 +428,16 @@ class MultiTransferAutomation:
         
         await asyncio.sleep(1)  # Ожидание обработки
         
-        # Шаг 11: ОПТИМИЗИРОВАННАЯ капча
-        logger.info("🔐 Step 11: Fast CAPTCHA solving")
+        # Шаг 11: КРИТИЧЕСКОЕ решение капчи
+        logger.info("🔐 Step 11: CRITICAL CAPTCHA solving")
         captcha_solved = await self.captcha_solver.solve_captcha(self._driver)
         
         if captcha_solved:
-            logger.info("✅ Step 11: CAPTCHA solved FAST")
+            logger.info("✅ Step 11: CAPTCHA solved successfully")
         else:
-            logger.warning("⚠️ Step 11: CAPTCHA failed or not needed")
+            logger.error("❌ Step 11: CAPTCHA solve FAILED - cannot proceed")
+            # КРИТИЧЕСКОЕ: если капча не решена - СТОП
+            raise Exception("CAPTCHA solve failed - payment process cannot continue")
         
         self.take_screenshot_conditional("fast_captcha_step.png")
     
