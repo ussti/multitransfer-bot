@@ -7,6 +7,7 @@ import logging
 import asyncio
 import aiohttp
 import random
+import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -24,8 +25,13 @@ class ProxyManager:
         self.api_key = None
         self.base_url = "https://px6.link/api"
         
+        # Проверяем временное отключение прокси
+        proxy_disabled_file = "/tmp/proxy_disabled"
+        if os.path.exists(proxy_disabled_file):
+            self.enabled = False
+            logger.info("🌐 ProxyManager initialized in DISABLED mode (temporarily disabled)")
         # Проверяем наличие конфигурации прокси
-        if config and config.get('proxy', {}).get('api_key'):
+        elif config and config.get('proxy', {}).get('api_key'):
             self.enabled = True
             self.api_key = config.get('proxy', {}).get('api_key')
             self.country = config.get('proxy', {}).get('country', 'ru')
@@ -177,8 +183,7 @@ class ProxyManager:
                 # Получаем список прокси
                 url = f"{self.base_url}/{self.api_key}/getproxy"
                 params = {
-                    'state': 'active',
-                    'descr': 'yes'
+                    'state': 'active'
                 }
                 
                 async with session.get(url, params=params) as response:
@@ -188,42 +193,43 @@ class ProxyManager:
                         if data.get('status') == 'yes':
                             self.proxies = []
                             
-                            # FIX: Правильно парсим данные прокси
-                            proxy_list = data.get('list', [])
+                            # ИСПРАВЛЕНО: Парсим данные согласно документации
+                            proxy_list = data.get('list', {})
                             
-                            # Если API возвращает список словарей
-                            if isinstance(proxy_list, list):
-                                for proxy_info in proxy_list:
+                            # API возвращает словарь вида {"11": {...}, "22": {...}}
+                            if isinstance(proxy_list, dict):
+                                for proxy_id, proxy_info in proxy_list.items():
                                     proxy_data = {
-                                        'id': proxy_info.get('id', proxy_info.get('proxy_id', '')),
-                                        'ip': proxy_info.get('host', proxy_info.get('ip', '')),
+                                        'id': proxy_info.get('id', proxy_id),
+                                        'ip': proxy_info.get('ip', proxy_info.get('host', '')),
                                         'port': str(proxy_info.get('port', '')),
                                         'user': proxy_info.get('user', ''),
                                         'pass': proxy_info.get('pass', ''),
                                         'country': proxy_info.get('country', 'ru'),
                                         'type': proxy_info.get('type', 'http'),
-                                        'active': proxy_info.get('active', 1) == 1
+                                        'date_end': proxy_info.get('date_end', ''),
+                                        'active': proxy_info.get('active', '0') == '1'  # Строка!
                                     }
                                     
                                     # Добавляем только активные прокси с валидными данными
                                     if proxy_data['active'] and proxy_data['ip'] and proxy_data['port']:
                                         self.proxies.append(proxy_data)
                             
-                            # Если API возвращает словарь (legacy format)
-                            elif isinstance(proxy_list, dict):
-                                for proxy_id, proxy_info in proxy_list.items():
+                            # Fallback для списка (если вдруг API изменится)
+                            elif isinstance(proxy_list, list):
+                                for proxy_info in proxy_list:
                                     proxy_data = {
-                                        'id': proxy_info.get('id', proxy_id),
-                                        'ip': proxy_info.get('host', proxy_info.get('ip', '')),
+                                        'id': proxy_info.get('id', ''),
+                                        'ip': proxy_info.get('ip', proxy_info.get('host', '')),
                                         'port': str(proxy_info.get('port', '')),
                                         'user': proxy_info.get('user', ''),
                                         'pass': proxy_info.get('pass', ''),
                                         'country': proxy_info.get('country', 'ru'),
                                         'type': proxy_info.get('type', 'http'),
-                                        'active': proxy_info.get('active', 1) == 1
+                                        'date_end': proxy_info.get('date_end', ''),
+                                        'active': proxy_info.get('active', 0) == 1
                                     }
                                     
-                                    # Добавляем только активные прокси
                                     if proxy_data['active'] and proxy_data['ip'] and proxy_data['port']:
                                         self.proxies.append(proxy_data)
                             

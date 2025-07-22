@@ -6,6 +6,7 @@ Main application entry point
 import asyncio
 import logging
 import sys
+import os
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -117,6 +118,7 @@ async def command_start_handler(message: Message) -> None:
 /settings - настройка ваших реквизитов
 /payment [сумма] - создать новый платеж
 /proxy - статус прокси-серверов
+/proxy_toggle - включить/выключить прокси
 
 <b>🚀 Начнем?</b>
 Сначала настройте ваши реквизиты командой /settings
@@ -137,6 +139,7 @@ async def command_help_handler(message: Message) -> None:
 • <code>/settings</code> - настройка реквизитов
 • <code>/payment [сумма]</code> - создать платеж
 • <code>/proxy</code> - статус прокси-серверов
+• <code>/proxy_toggle</code> - включить/выключить прокси
 
 <b>Примеры использования:</b>
 • <code>/payment 5000</code> - платеж на 5000 рублей
@@ -168,24 +171,30 @@ async def command_proxy_handler(message: Message) -> None:
         config_dict = config.to_dict()
         proxy_manager = ProxyManager(config_dict)
         
-        # Получаем статистику
-        stats = proxy_manager.get_stats()
-        
         # Пытаемся получить прокси для теста
+        proxy = None
+        proxy_info = ""
         try:
             proxy = await proxy_manager.get_proxy()
-            proxy_info = ""
             if proxy:
                 proxy_info = f"""
 🌐 <b>Активный прокси:</b>
 • IP: <code>{proxy['ip']}:{proxy['port']}</code>
 • Страна: {proxy.get('country', 'N/A')}
 • Пользователь: <code>{proxy.get('user', 'N/A')}</code>
+• Действует до: <code>{proxy.get('date_end', 'N/A').split(' ')[0] if proxy.get('date_end') and ' ' in proxy.get('date_end', '') else proxy.get('date_end', 'N/A')}</code>
 """
             else:
                 proxy_info = "\n⚠️ <b>Прокси недоступны</b> - работаем в прямом режиме"
         except Exception as e:
             proxy_info = f"\n❌ <b>Ошибка получения прокси:</b> {str(e)}"
+        
+        # Получаем статистику ПОСЛЕ получения прокси
+        stats = proxy_manager.get_stats()
+        
+        # Проверяем статус переключателя
+        proxy_disabled_file = "/tmp/proxy_disabled"
+        is_manually_disabled = os.path.exists(proxy_disabled_file)
         
         # Формируем ответ
         proxy_text = f"""
@@ -196,12 +205,14 @@ async def command_proxy_handler(message: Message) -> None:
 • Рабочих: {stats['working_proxies']}
 • Сломанных: {stats['failed_proxies']}
 • Успешность: {stats['success_rate']}
-• Режим: {'🌐 Прокси' if stats['enabled'] else '🔒 Прямое соединение'}
+• Режим: {'🔴 ОТКЛЮЧЕНО вручную' if is_manually_disabled else ('🌐 Прокси' if stats['enabled'] else '🔒 Прямое соединение')}
 • API ключ: {'✅ Настроен' if stats['api_key_configured'] else '❌ Не настроен'}
 • Обновление: {stats['last_update'] or 'Никогда'}
 {proxy_info}
 
-💡 <b>Подсказка:</b> Если прокси недоступны, проверьте баланс на Proxy6.net и купите активные прокси.
+🔧 <b>Управление:</b> Используйте /proxy_toggle для включения/отключения
+
+💡 <b>Подсказка:</b> {'Прокси отключены командой /proxy_toggle' if is_manually_disabled else ('Прокси работает корректно! Платежи будут создаваться через защищённое соединение.' if proxy else 'Если прокси недоступны, проверьте баланс на Proxy6.net и купите активные прокси.')}
 """
         
         await message.answer(proxy_text)
@@ -210,6 +221,56 @@ async def command_proxy_handler(message: Message) -> None:
         logger.error(f"Error in proxy command: {e}")
         await message.answer(
             "❌ <b>Ошибка получения статистики прокси</b>\n\n"
+            "Попробуйте позже или обратитесь к администратору."
+        )
+
+@dp.message(Command("proxy_toggle"))
+async def command_proxy_toggle_handler(message: Message) -> None:
+    """Handler for /proxy_toggle command"""
+    try:
+        logger.info(f"Proxy toggle command received from user {message.from_user.id}")
+        
+        # Читаем текущее состояние из конфига
+        config_dict = config.to_dict()
+        current_proxy_enabled = config_dict.get('proxy', {}).get('api_key') is not None
+        
+        # Создаем временный файл для отключения прокси
+        proxy_disabled_file = "/tmp/proxy_disabled"
+        
+        if os.path.exists(proxy_disabled_file):
+            # Прокси отключены, включаем
+            os.remove(proxy_disabled_file)
+            status_text = """
+🟢 <b>Прокси ВКЛЮЧЕНЫ</b>
+
+✅ Платежи будут создаваться через прокси-сервер
+🌐 IP адрес будет скрыт
+🔒 Повышенная безопасность
+
+<b>Активный прокси:</b> 45.135.31.34:8000
+"""
+            logger.info(f"User {message.from_user.id} ENABLED proxy")
+        else:
+            # Прокси включены, отключаем
+            with open(proxy_disabled_file, 'w') as f:
+                f.write("disabled")
+            status_text = """
+🔴 <b>Прокси ОТКЛЮЧЕНЫ</b>
+
+⚠️ Платежи будут создаваться БЕЗ прокси
+🌍 Используется ваш реальный IP адрес
+⚡ Быстрее, но менее безопасно
+
+<b>Режим:</b> Прямое соединение
+"""
+            logger.info(f"User {message.from_user.id} DISABLED proxy")
+        
+        await message.answer(status_text)
+        
+    except Exception as e:
+        logger.error(f"Error in proxy toggle command: {e}")
+        await message.answer(
+            "❌ <b>Ошибка переключения прокси</b>\n\n"
             "Попробуйте позже или обратитесь к администратору."
         )
 
