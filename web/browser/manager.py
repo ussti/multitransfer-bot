@@ -176,8 +176,22 @@ class BrowserManager:
                 # Get proxy if available and requested
                 proxy = None
                 if use_proxy and self.proxy_manager:
-                    proxy = await self.proxy_manager.get_working_proxy()
-                    if proxy:
+                    proxy_dict = await self.proxy_manager.get_proxy()
+                    if proxy_dict:
+                        # Создаем ProxyInfo из словаря
+                        proxy = ProxyInfo(
+                            id=proxy_dict.get('id', ''),
+                            ip=proxy_dict.get('ip', ''),
+                            host=proxy_dict.get('ip', ''),  # ip = host
+                            port=proxy_dict.get('port', ''),
+                            user=proxy_dict.get('user', ''),
+                            password=proxy_dict.get('pass', ''),
+                            type=proxy_dict.get('type', 'http'),
+                            country=proxy_dict.get('country', ''),
+                            date=proxy_dict.get('date', ''),
+                            date_end=proxy_dict.get('date_end', ''),
+                            active=proxy_dict.get('active', True)
+                        )
                         logger.info(f"🌐 Using proxy: {proxy.host}:{proxy.port}")
                         self.current_proxy = proxy
                         self.fallback_mode = False
@@ -218,7 +232,7 @@ class BrowserManager:
                 
                 # Mark proxy as failed if we were using one
                 if proxy and self.proxy_manager:
-                    await self.proxy_manager.mark_proxy_result(proxy.id, False)
+                    await self.proxy_manager.mark_proxy_failed(proxy.host, proxy.port, str(e))
                 
                 if attempt < self.max_retries - 1:
                     wait_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
@@ -252,6 +266,15 @@ class BrowserManager:
                 chrome_options.add_argument(f"--proxy-server=http://{proxy.host}:{proxy.port}")
             elif proxy.type == "socks":
                 chrome_options.add_argument(f"--proxy-server=socks5://{proxy.host}:{proxy.port}")
+            
+            # ВАЖНО: Добавляем аутентификацию прокси
+            if proxy.user and proxy.password:
+                # Создаем расширение для прокси аутентификации
+                self._create_proxy_auth_extension(proxy.user, proxy.password)
+                # Добавляем расширение в Chrome
+                auth_extension_path = os.path.join(os.getcwd(), 'proxy_auth_extension')
+                if os.path.exists(auth_extension_path):
+                    chrome_options.add_argument(f"--load-extension={auth_extension_path}")
         
         # Anti-Captcha plugin configuration
         if self._check_plugin_availability():
@@ -302,6 +325,78 @@ class BrowserManager:
             self.plugin_loaded = False
         
         return chrome_options
+    
+    def _create_proxy_auth_extension(self, username: str, password: str):
+        """Создает временное расширение для аутентификации прокси"""
+        extension_dir = os.path.join(os.getcwd(), 'proxy_auth_extension')
+        
+        try:
+            # Создаем директорию расширения
+            os.makedirs(extension_dir, exist_ok=True)
+            
+            # Создаем manifest.json
+            manifest = {
+                "version": "1.0",
+                "manifest_version": 2,
+                "name": "Proxy Auth",
+                "permissions": [
+                    "proxy",
+                    "tabs",
+                    "unlimitedStorage",
+                    "storage",
+                    "<all_urls>",
+                    "webRequest",
+                    "webRequestBlocking"
+                ],
+                "background": {
+                    "scripts": ["background.js"]
+                },
+                "minimum_chrome_version": "22.0.0"
+            }
+            
+            with open(os.path.join(extension_dir, 'manifest.json'), 'w') as f:
+                import json
+                json.dump(manifest, f)
+            
+            # Создаем background.js для аутентификации
+            background_js = f"""
+var config = {{
+    mode: "fixed_servers",
+    rules: {{
+        singleProxy: {{
+            scheme: "http",
+            host: "{self.current_proxy.host if hasattr(self, 'current_proxy') and self.current_proxy else ''}",
+            port: parseInt("{self.current_proxy.port if hasattr(self, 'current_proxy') and self.current_proxy else ''}")
+        }},
+        bypassList: ["localhost"]
+    }}
+}};
+
+chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+
+function callbackFn(details) {{
+    return {{
+        authCredentials: {{
+            username: "{username}",
+            password: "{password}"
+        }}
+    }};
+}}
+
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {{urls: ["<all_urls>"]}},
+    ['blocking']
+);
+"""
+            
+            with open(os.path.join(extension_dir, 'background.js'), 'w') as f:
+                f.write(background_js)
+            
+            logger.info(f"✅ Proxy auth extension created: {extension_dir}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create proxy auth extension: {e}")
     
     async def _configure_anticaptcha_plugin(self) -> bool:
         """Configure Anti-Captcha plugin after browser startup"""
@@ -425,7 +520,7 @@ class BrowserManager:
                 
                 # Mark proxy as successful if we used one
                 if self.current_proxy and self.proxy_manager:
-                    await self.proxy_manager.mark_proxy_result(self.current_proxy.id, True, response_time)
+                    await self.proxy_manager.mark_proxy_success(self.current_proxy.host, self.current_proxy.port, response_time)
                 
                 return True
             else:
@@ -459,7 +554,7 @@ class BrowserManager:
                 
                 # Mark proxy as successful if we used one
                 if self.current_proxy and self.proxy_manager:
-                    await self.proxy_manager.mark_proxy_result(self.current_proxy.id, True, response_time)
+                    await self.proxy_manager.mark_proxy_success(self.current_proxy.host, self.current_proxy.port, response_time)
                 
                 return True
             else:
@@ -471,7 +566,7 @@ class BrowserManager:
             
             # Mark proxy as failed if we used one
             if self.current_proxy and self.proxy_manager:
-                await self.proxy_manager.mark_proxy_result(self.current_proxy.id, False)
+                await self.proxy_manager.mark_proxy_failed(self.current_proxy.host, self.current_proxy.port, str(e))
             
             return False
     
@@ -624,7 +719,7 @@ class BrowserManager:
             
             # Mark current proxy as failed if we have one
             if self.current_proxy:
-                await self.proxy_manager.mark_proxy_result(self.current_proxy.id, False)
+                await self.proxy_manager.mark_proxy_failed(self.current_proxy.host, self.current_proxy.port, "proxy_switch")
             
             # Restart browser with new proxy
             success = await self.restart_browser()
@@ -648,6 +743,14 @@ class BrowserManager:
                 self.driver = None
                 self.plugin_loaded = False
                 logger.debug("🧹 Browser cleaned up")
+            
+            # Очищаем временное расширение прокси-аутентификации
+            auth_extension_path = os.path.join(os.getcwd(), 'proxy_auth_extension')
+            if os.path.exists(auth_extension_path):
+                import shutil
+                shutil.rmtree(auth_extension_path, ignore_errors=True)
+                logger.debug("🧹 Proxy auth extension cleaned up")
+                
         except Exception as e:
             logger.debug(f"🧹 Browser cleanup error: {e}")
     

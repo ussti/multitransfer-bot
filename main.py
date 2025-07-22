@@ -116,6 +116,7 @@ async def command_start_handler(message: Message) -> None:
 /help - справка по использованию  
 /settings - настройка ваших реквизитов
 /payment [сумма] - создать новый платеж
+/proxy - статус прокси-серверов
 
 <b>🚀 Начнем?</b>
 Сначала настройте ваши реквизиты командой /settings
@@ -135,6 +136,7 @@ async def command_help_handler(message: Message) -> None:
 • <code>/help</code> - эта справка
 • <code>/settings</code> - настройка реквизитов
 • <code>/payment [сумма]</code> - создать платеж
+• <code>/proxy</code> - статус прокси-серверов
 
 <b>Примеры использования:</b>
 • <code>/payment 5000</code> - платеж на 5000 рублей
@@ -154,6 +156,62 @@ async def command_help_handler(message: Message) -> None:
 Все ваши данные хранятся локально и защищены.
     """
     await message.answer(help_text)
+
+@dp.message(Command("proxy"))
+async def command_proxy_handler(message: Message) -> None:
+    """Handler for /proxy command"""
+    try:
+        logger.info(f"Proxy status command received from user {message.from_user.id}")
+        
+        # Создаем ProxyManager для получения статистики
+        from core.proxy.manager import ProxyManager
+        config_dict = config.to_dict()
+        proxy_manager = ProxyManager(config_dict)
+        
+        # Получаем статистику
+        stats = proxy_manager.get_stats()
+        
+        # Пытаемся получить прокси для теста
+        try:
+            proxy = await proxy_manager.get_proxy()
+            proxy_info = ""
+            if proxy:
+                proxy_info = f"""
+🌐 <b>Активный прокси:</b>
+• IP: <code>{proxy['ip']}:{proxy['port']}</code>
+• Страна: {proxy.get('country', 'N/A')}
+• Пользователь: <code>{proxy.get('user', 'N/A')}</code>
+"""
+            else:
+                proxy_info = "\n⚠️ <b>Прокси недоступны</b> - работаем в прямом режиме"
+        except Exception as e:
+            proxy_info = f"\n❌ <b>Ошибка получения прокси:</b> {str(e)}"
+        
+        # Формируем ответ
+        proxy_text = f"""
+🌐 <b>Статус прокси-серверов</b>
+
+📊 <b>Статистика:</b>
+• Всего прокси: {stats['total_proxies']}
+• Рабочих: {stats['working_proxies']}
+• Сломанных: {stats['failed_proxies']}
+• Успешность: {stats['success_rate']}
+• Режим: {'🌐 Прокси' if stats['enabled'] else '🔒 Прямое соединение'}
+• API ключ: {'✅ Настроен' if stats['api_key_configured'] else '❌ Не настроен'}
+• Обновление: {stats['last_update'] or 'Никогда'}
+{proxy_info}
+
+💡 <b>Подсказка:</b> Если прокси недоступны, проверьте баланс на Proxy6.net и купите активные прокси.
+"""
+        
+        await message.answer(proxy_text)
+        
+    except Exception as e:
+        logger.error(f"Error in proxy command: {e}")
+        await message.answer(
+            "❌ <b>Ошибка получения статистики прокси</b>\n\n"
+            "Попробуйте позже или обратитесь к администратору."
+        )
 
 @dp.message(Command("settings"))
 async def command_settings_handler(message: Message, state: FSMContext) -> None:
