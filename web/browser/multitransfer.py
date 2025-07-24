@@ -471,7 +471,11 @@ class MultiTransferAutomation:
                 break
         
         if not modal_found:
-            logger.warning("⚠️ No 'Проверка данных' modal found - this is unexpected after FIRST CAPTCHA")
+            logger.warning("⚠️ No 'Проверка данных' modal found - checking for form return scenario")
+            # Делаем скриншот для диагностики текущего состояния
+            self.take_screenshot_conditional("no_modal_found_diagnostic.png")
+            # Если нет модального окна, возможно сайт вернул к форме - ищем синюю кнопку "Продолжить"
+            await self._handle_form_return_scenario()
             return
         
         self.take_screenshot_conditional("step12_modal_found.png")
@@ -498,6 +502,173 @@ class MultiTransferAutomation:
             raise Exception("DIAGNOSTIC: Failed to handle modal - payment cannot be completed")
         
         logger.info("🏃‍♂️ Step 12 DIAGNOSTIC completion - proceeding to result extraction")
+    
+    async def _handle_form_return_scenario(self):
+        """
+        Обработка сценария возврата к форме ввода данных
+        Сначала проверяем на вторую капчу, потом ищем синюю кнопку "Продолжить"
+        """
+        logger.info("🔍 Handling form return scenario - checking for second captcha first")
+        
+        # Делаем скриншот текущего состояния
+        self.take_screenshot_conditional("form_return_scenario.png")
+        
+        # Сначала проверяем на вторую капчу
+        logger.info("🔍 CHECKING for potential SECOND CAPTCHA in form return scenario...")
+        await self._handle_potential_second_captcha()
+        
+        logger.info("🔍 Now looking for blue 'Продолжить' button after captcha check")
+        
+        # Расширенные селекторы для кнопки продолжения (все возможные варианты)
+        continue_button_selectors = [
+            # Стандартные варианты с "Продолжить"
+            "//button[contains(text(), 'Продолжить')]",
+            "//button[contains(text(), 'ПРОДОЛЖИТЬ')]", 
+            "//input[@type='submit' and contains(@value, 'Продолжить')]",
+            "//input[@type='submit' and contains(@value, 'ПРОДОЛЖИТЬ')]",
+            "//button[contains(@class, 'btn') and contains(text(), 'Продолжить')]",
+            "//button[contains(@class, 'btn-primary') and contains(text(), 'Продолжить')]",
+            "//a[contains(@class, 'btn') and contains(text(), 'Продолжить')]",
+            "//*[@type='submit' and contains(text(), 'Продолжить')]",
+            "//*[contains(@class, 'btn') and contains(., 'Продолжить')]",
+            
+            # Альтернативные тексты кнопок
+            "//button[contains(text(), 'Отправить')]",
+            "//button[contains(text(), 'ОТПРАВИТЬ')]",
+            "//button[contains(text(), 'Далее')]",
+            "//button[contains(text(), 'ДАЛЕЕ')]",
+            "//button[contains(text(), 'Подтвердить')]",
+            "//button[contains(text(), 'ПОДТВЕРДИТЬ')]",
+            "//button[contains(text(), 'Создать перевод')]",
+            "//button[contains(text(), 'СОЗДАТЬ ПЕРЕВОД')]",
+            "//button[contains(text(), 'Перевести')]",
+            "//button[contains(text(), 'ПЕРЕВЕСТИ')]",
+            
+            # Submit кнопки с альтернативными текстами
+            "//input[@type='submit' and contains(@value, 'Отправить')]",
+            "//input[@type='submit' and contains(@value, 'Далее')]",
+            "//input[@type='submit' and contains(@value, 'Подтвердить')]",
+            "//input[@type='submit' and contains(@value, 'Создать')]",
+            
+            # Синие кнопки по классам (независимо от текста)
+            "//button[contains(@class, 'btn-primary')]",
+            "//button[contains(@class, 'btn-blue')]", 
+            "//button[contains(@class, 'primary')]",
+            "//button[contains(@class, 'blue')]",
+            "//button[contains(@style, 'blue')]",
+            "//button[contains(@style, 'primary')]",
+            
+            # Любые submit элементы
+            "//*[@type='submit']",
+            "//button[@type='submit']",
+            "//input[@type='submit']",
+            
+            # Широкий поиск по классам btn
+            "//button[contains(@class, 'btn')]",
+            "//a[contains(@class, 'btn')]",
+            "//*[contains(@class, 'button')]",
+            
+            # Последний шанс - любые кликабельные элементы с текстом
+            "//*[contains(text(), 'продолжить')]",
+            "//*[contains(text(), 'отправить')]", 
+            "//*[contains(text(), 'далее')]",
+            "//*[contains(text(), 'подтвердить')]"
+        ]
+        
+        button_found = False
+        for i, selector in enumerate(continue_button_selectors):
+            try:
+                logger.debug(f"🔍 Trying selector {i+1}/{len(continue_button_selectors)}: {selector}")
+                button = self.find_element_fast(By.XPATH, selector, timeout=2)
+                if button and button.is_displayed():
+                    button_text = button.text.strip() if hasattr(button, 'text') else ''
+                    button_value = button.get_attribute('value') if button.get_attribute('value') else ''
+                    logger.info(f"✅ Found button with selector: {selector}")
+                    logger.info(f"   Button text: '{button_text}', value: '{button_value}'")
+                    
+                    # Скроллим к кнопке и кликаем
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                    await asyncio.sleep(1)
+                    
+                    # Пытаемся кликнуть
+                    try:
+                        button.click()
+                        logger.info("✅ Successfully clicked button with normal click")
+                        button_found = True
+                        break
+                    except Exception as click_error:
+                        logger.warning(f"⚠️ Failed to click button with normal click: {click_error}")
+                        # Попробуем JavaScript клик
+                        try:
+                            self.driver.execute_script("arguments[0].click();", button)
+                            logger.info("✅ Successfully clicked button via JavaScript")
+                            button_found = True
+                            break
+                        except Exception as js_error:
+                            logger.warning(f"⚠️ JavaScript click also failed: {js_error}")
+                            # Попробуем через ActionChains
+                            try:
+                                from selenium.webdriver.common.action_chains import ActionChains
+                                ActionChains(self.driver).move_to_element(button).click().perform()
+                                logger.info("✅ Successfully clicked button via ActionChains")
+                                button_found = True
+                                break
+                            except Exception as action_error:
+                                logger.warning(f"⚠️ ActionChains click also failed: {action_error}")
+                                continue
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
+                continue
+        
+        if button_found:
+            logger.info("✅ Form return scenario handled successfully - waiting for result")
+            await asyncio.sleep(3)  # Ждем обработку формы
+            self.take_screenshot_conditional("form_return_success.png")
+        else:
+            logger.error("❌ Could not find any button in form return scenario")
+            
+            # Диагностическая информация
+            try:
+                # Получаем текущий URL
+                current_url = self.driver.current_url
+                logger.error(f"📍 Current URL: {current_url}")
+                
+                # Получаем заголовок страницы
+                page_title = self.driver.title
+                logger.error(f"📄 Page title: {page_title}")
+                
+                # Ищем все кнопки на странице для диагностики
+                all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                logger.error(f"🔍 Found {len(all_buttons)} button elements on page")
+                
+                for i, btn in enumerate(all_buttons[:10]):  # Показываем первые 10 кнопок
+                    try:
+                        btn_text = btn.text.strip()
+                        btn_class = btn.get_attribute("class")
+                        btn_type = btn.get_attribute("type")
+                        btn_visible = btn.is_displayed()
+                        logger.error(f"  Button {i+1}: text='{btn_text}', class='{btn_class}', type='{btn_type}', visible={btn_visible}")
+                    except:
+                        pass
+                
+                # Ищем все input submit элементы
+                all_inputs = self.driver.find_elements(By.XPATH, "//input[@type='submit']")
+                logger.error(f"🔍 Found {len(all_inputs)} input[type='submit'] elements")
+                
+                for i, inp in enumerate(all_inputs[:5]):  # Показываем первые 5 инпутов
+                    try:
+                        inp_value = inp.get_attribute("value")
+                        inp_class = inp.get_attribute("class")
+                        inp_visible = inp.is_displayed()
+                        logger.error(f"  Input {i+1}: value='{inp_value}', class='{inp_class}', visible={inp_visible}")
+                    except:
+                        pass
+                        
+            except Exception as diag_error:
+                logger.error(f"❌ Error during diagnostic: {diag_error}")
+            
+            self.take_screenshot_conditional("form_return_failure.png")
+            raise Exception("Failed to handle form return scenario - no suitable button found")
     
     async def _handle_potential_second_captcha(self):
         """
