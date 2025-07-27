@@ -56,7 +56,8 @@ async def load_passport_data():
                     return
                 
                 # Удаляем существующие данные
-                await session.execute("DELETE FROM passport_data")
+                from sqlalchemy import text
+                await session.execute(text("DELETE FROM passport_data"))
                 await session.commit()
                 logger.info("🗑️ Cleared existing data")
             

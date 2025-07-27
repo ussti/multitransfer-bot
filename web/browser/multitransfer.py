@@ -8,6 +8,7 @@ import asyncio
 import random
 import time
 import re
+import os
 from typing import Dict, Any, Optional
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -133,15 +134,35 @@ class MultiTransferAutomation:
             
             options = uc.ChromeOptions()
             
-            # ОПТИМИЗИРОВАННЫЕ настройки для скорости
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--disable-extensions')
-            options.add_argument('--disable-plugins')
-            options.add_argument('--disable-images')  # Отключаем загрузку изображений
-            options.add_argument('--disable-javascript')  # Частично отключаем JS (где возможно)
-            options.add_argument('--window-size=1920,1080')
+            # DEBUG MODE START - Проверяем режим отладки
+            debug_mode = os.getenv('DEBUG_BROWSER', 'false').lower() == 'true'
+            proxy_disabled_file = "/tmp/proxy_disabled"
+            visual_debug = os.path.exists(proxy_disabled_file) or debug_mode
+            
+            if visual_debug:
+                # РЕЖИМ ОТЛАДКИ - браузер будет видимым и полнофункциональным
+                logger.info("🔍 DEBUG MODE: Browser will be visible for debugging")
+                options.add_argument('--window-size=1400,1000')
+                options.add_argument('--start-maximized')
+                # Добавляем флаги для стабильности в визуальном режиме
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage') 
+                options.add_argument('--disable-blink-features=AutomationControlled')
+                options.add_argument('--disable-web-security')
+                # Включаем все для лучшей отладки - изображения, JS, расширения
+                logger.info("🎨 DEBUG: Enabling images, JavaScript and extensions for better debugging")
+            else:
+                # ПРОДАКШЕН РЕЖИМ - оптимизированные настройки для скорости
+                logger.info("⚡ PRODUCTION MODE: Optimized settings for speed")
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+                options.add_argument('--disable-gpu')
+                options.add_argument('--disable-extensions')
+                options.add_argument('--disable-plugins')
+                options.add_argument('--disable-images')  # Отключаем загрузку изображений
+                options.add_argument('--disable-javascript')  # Частично отключаем JS (где возможно)
+                options.add_argument('--window-size=1920,1080')
+            # DEBUG MODE END
             
             # Прокси
             if self.proxy:
@@ -154,7 +175,21 @@ class MultiTransferAutomation:
             
             # Создаем драйвер с быстрыми настройками
             self._driver = uc.Chrome(options=options)
-            self._driver.implicitly_wait(3)  # Сокращено с 10 до 3 секунд
+            
+            # Адаптивные таймауты в зависимости от использования прокси
+            if self.proxy:
+                self._driver.implicitly_wait(10)  # Больше времени для прокси
+                self._driver.set_page_load_timeout(60)  # 60 сек для загрузки через прокси
+                logger.info("⏱️ PROXY MODE: Extended timeouts enabled (10s implicit, 60s page load)")
+            else:
+                self._driver.implicitly_wait(3)   # Быстро без прокси
+                self._driver.set_page_load_timeout(30)  # 30 сек без прокси
+                logger.info("⚡ DIRECT MODE: Fast timeouts enabled (3s implicit, 30s page load)")
+            
+            # Дополнительная задержка для стабильности в визуальном режиме
+            if visual_debug:
+                logger.info("⏱️ DEBUG MODE: Adding extra delay for browser stability")
+                await asyncio.sleep(2)
             
             logger.info("✅ Fast Chrome driver ready")
             return self._driver
@@ -218,6 +253,98 @@ class MultiTransferAutomation:
             except:
                 pass
     
+    def take_debug_screenshot(self, filename: str, force: bool = False):
+        """DEBUG скриншот для разработки"""
+        import os
+        from datetime import datetime
+        
+        debug_enabled = os.getenv('DEBUG_SCREENSHOTS', 'false').lower() == 'true'
+        
+        if not force and not debug_enabled:
+            return
+        
+        if not self._driver:
+            return
+            
+        try:
+            timestamp = datetime.now().strftime("%H%M%S")
+            debug_filename = f"{timestamp}_{filename}"
+            
+            os.makedirs("logs/automation/debug_screenshots", exist_ok=True)
+            
+            screenshot_path = f"logs/automation/debug_screenshots/{debug_filename}"
+            self._driver.save_screenshot(screenshot_path)
+            logger.info(f"🐛 DEBUG Screenshot: {screenshot_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save debug screenshot: {e}")
+    
+    def check_connection_health(self) -> bool:
+        """Проверить здоровье соединения с сайтом"""
+        try:
+            current_url = self._driver.current_url
+            page_source = self._driver.page_source
+            
+            # Проверяем на стандартные ошибки соединения
+            connection_errors = [
+                "can't be reached",
+                "ERR_TIMED_OUT", 
+                "ERR_CONNECTION_REFUSED",
+                "ERR_PROXY_CONNECTION_FAILED",
+                "This site can't be reached",
+                "took too long to respond",
+                "No internet"
+            ]
+            
+            for error in connection_errors:
+                if error in page_source:
+                    logger.error(f"❌ Connection error detected: {error}")
+                    return False
+            
+            # Проверяем что мы на правильном сайте
+            if "multitransfer" not in current_url.lower():
+                logger.error(f"❌ Wrong site detected. Current URL: {current_url}")
+                return False
+                
+            logger.debug(f"✅ Connection healthy. URL: {current_url}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking connection health: {e}")
+            return False
+    
+    async def retry_on_connection_failure(self, operation_func, max_retries: int = 2, operation_name: str = "operation"):
+        """Retry операции при потере соединения"""
+        for attempt in range(max_retries + 1):
+            try:
+                # Проверяем соединение перед попыткой
+                if not self.check_connection_health():
+                    if attempt < max_retries:
+                        logger.warning(f"🔄 Connection unhealthy, retry {attempt + 1}/{max_retries} for {operation_name}")
+                        await asyncio.sleep(5)  # Ждем 5 секунд
+                        
+                        # Пробуем обновить страницу
+                        try:
+                            self._driver.refresh()
+                            await asyncio.sleep(3)
+                        except:
+                            logger.warning("⚠️ Page refresh failed")
+                        continue
+                    else:
+                        raise Exception(f"Connection failed after {max_retries} retries for {operation_name}")
+                
+                # Выполняем операцию
+                return await operation_func()
+                
+            except Exception as e:
+                if attempt < max_retries and ("connection" in str(e).lower() or "timeout" in str(e).lower()):
+                    logger.warning(f"🔄 {operation_name} failed (attempt {attempt + 1}), retrying: {e}")
+                    await asyncio.sleep(5)
+                    continue
+                else:
+                    raise e
+        
+        raise Exception(f"All retry attempts failed for {operation_name}")
+    
     # ОСНОВНОЙ МЕТОД
     
     async def create_payment(self, payment_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -231,9 +358,18 @@ class MultiTransferAutomation:
             if not driver:
                 return {'success': False, 'error': 'Failed to setup browser driver'}
             
-            # Открытие сайта
-            self._driver.get(self.base_url)
-            self.take_screenshot_conditional("00_homepage.png")
+            # Открытие сайта с обработкой ошибок
+            try:
+                logger.info(f"🌐 Opening website: {self.base_url}")
+                self._driver.get(self.base_url)
+                logger.info("✅ Website opened successfully")
+                self.take_screenshot_conditional("00_homepage.png")
+            except Exception as e:
+                logger.error(f"❌ Failed to open website: {e}")
+                if "target window already closed" in str(e):
+                    logger.error("💡 Browser window was closed. This might be due to Chrome flags in debug mode.")
+                    logger.error("🔧 Try running again - sometimes undetected_chromedriver needs a retry.")
+                raise Exception(f"Failed to open website: {e}")
             
             # ОПТИМИЗИРОВАННАЯ последовательность
             await self._fast_country_and_amount(payment_data)
@@ -326,16 +462,80 @@ class MultiTransferAutomation:
         
         await asyncio.sleep(0.3)
         
-        # Выбираем Корти Милли
+        # DEBUG: Скриншот перед выбором банка
+        self.take_debug_screenshot("bank_selection_before.png")
+        
+        # КРИТИЧЕСКАЯ ПРОВЕРКА: здоровье соединения перед выбором банка
+        if not self.check_connection_health():
+            logger.error("❌ CRITICAL: Connection unhealthy before bank selection!")
+            self.take_debug_screenshot("connection_failed_before_bank.png", force=True)
+            raise Exception("Connection lost or unhealthy - cannot proceed with bank selection")
+        
+        # Выбираем Корти Милли или fallback на "Все карты"
+        korti_selected = False
         for selector in self.selectors['korti_milli_option']:
             elements = self.find_elements_fast(By.XPATH, selector)
             for element in elements:
                 if element.is_displayed() and self.click_element_fast(element):
                     logger.info("✅ Step 5: Korti Milli selected")
+                    korti_selected = True
                     break
-            else:
-                continue
-            break
+            if korti_selected:
+                break
+        
+        # Fallback: если Корти Милли не найден, выбираем "Все карты"
+        if not korti_selected:
+            logger.warning("⚠️ Korti Milli not found, trying 'Все карты' fallback")
+            
+            # DEBUG: Скриншот при переходе к fallback
+            self.take_debug_screenshot("korti_milli_not_found.png")
+            
+            fallback_selectors = [
+                "//*[contains(text(), 'Все карты')]",
+                "//*[contains(text(), 'ВСЕ КАРТЫ')]",
+                "//button[contains(text(), 'Все карты')]",
+                "//div[contains(text(), 'Все карты')]",
+                "//span[contains(text(), 'Все карты')]",     # Быстрое дополнение
+                "//label[contains(text(), 'Все карты')]",    # Быстрое дополнение
+                "//*[contains(text(), 'Другие банки')]",     # Альтернативное название
+                "//*[contains(@class, 'bank') and contains(text(), 'Все')]"
+            ]
+            
+            for selector in fallback_selectors:
+                elements = self.find_elements_fast(By.XPATH, selector)
+                for element in elements:
+                    if element.is_displayed() and self.click_element_fast(element):
+                        logger.info("✅ Step 5: 'Все карты' selected as fallback")
+                        korti_selected = True
+                        break
+                if korti_selected:
+                    break
+        
+        if not korti_selected:
+            logger.error("❌ CRITICAL: Neither Korti Milli nor 'Все карты' could be selected")
+            
+            # Дополнительная проверка соединения при неудаче
+            if not self.check_connection_health():
+                logger.error("❌ DOUBLE CHECK: Connection lost during bank selection!")
+                self.take_debug_screenshot("connection_lost_during_bank_selection.png", force=True)
+                raise Exception("Connection lost during bank selection - this explains why banks were not found")
+            
+            # Быстрая диагностика - показываем первые 5 элементов с "карт"
+            try:
+                card_elements = self._driver.find_elements(By.XPATH, "//*[contains(text(), 'карт') or contains(text(), 'КАРТ')]")[:5]
+                logger.error(f"🔍 Found {len(card_elements)} elements with 'карт':")
+                for i, elem in enumerate(card_elements):
+                    try:
+                        logger.error(f"  {i+1}. '{elem.text.strip()[:30]}' (visible: {elem.is_displayed()})")
+                    except:
+                        pass
+            except:
+                pass
+            
+            # DEBUG: Критический скриншот при полном провале
+            self.take_debug_screenshot("bank_selection_failed_critical.png", force=True)
+            self.take_screenshot_conditional("bank_selection_failed.png")
+            raise Exception("Bank selection failed - cannot continue without selecting a bank")
         
         # Шаг 6: ПРОДОЛЖИТЬ - БЫСТРО
         await asyncio.sleep(0.3)
@@ -519,7 +719,18 @@ class MultiTransferAutomation:
         
         logger.info("🔍 Now looking for blue 'Продолжить' button after captcha check")
         
-        # Расширенные селекторы для кнопки продолжения (все возможные варианты)
+        # Сначала проверяем, где мы находимся
+        current_url = self._driver.current_url
+        logger.info(f"📍 Current location before button search: {current_url}")
+        
+        # Если мы на главной странице - это означает, что процесс уже завершился неудачно
+        if current_url == "https://multitransfer.ru/" or "/transfer/" not in current_url:
+            logger.error("❌ Already on homepage - payment process failed earlier!")
+            logger.error("💡 This means the form submission or previous steps failed")
+            self.take_screenshot_conditional("already_on_homepage.png")
+            raise Exception("Payment process failed - redirected to homepage before button search")
+        
+        # Расширенные селекторы для кнопки продолжения 
         continue_button_selectors = [
             # Стандартные варианты с "Продолжить"
             "//button[contains(text(), 'Продолжить')]",
@@ -550,25 +761,21 @@ class MultiTransferAutomation:
             "//input[@type='submit' and contains(@value, 'Подтвердить')]",
             "//input[@type='submit' and contains(@value, 'Создать')]",
             
-            # Синие кнопки по классам (независимо от текста)
-            "//button[contains(@class, 'btn-primary')]",
-            "//button[contains(@class, 'btn-blue')]", 
-            "//button[contains(@class, 'primary')]",
-            "//button[contains(@class, 'blue')]",
-            "//button[contains(@style, 'blue')]",
-            "//button[contains(@style, 'primary')]",
+            # Submit элементы (но НЕ с текстом Reload/Details)
+            "//button[@type='submit' and not(contains(text(), 'Reload')) and not(contains(text(), 'Details'))]",
+            "//input[@type='submit' and not(contains(@value, 'Reload')) and not(contains(@value, 'Details'))]",
             
-            # Любые submit элементы
-            "//*[@type='submit']",
-            "//button[@type='submit']",
-            "//input[@type='submit']",
+            # Синие кнопки по классам (НО исключаем известные проблемные)
+            "//button[contains(@class, 'btn-primary') and not(contains(text(), 'Reload')) and not(contains(text(), 'Details'))]",
+            "//button[contains(@class, 'primary') and not(contains(text(), 'Reload')) and not(contains(text(), 'Details'))]",
             
-            # Широкий поиск по классам btn
-            "//button[contains(@class, 'btn')]",
-            "//a[contains(@class, 'btn')]",
-            "//*[contains(@class, 'button')]",
+            # Любые submit элементы (кроме проблемных)
+            "//*[@type='submit' and not(contains(text(), 'Reload')) and not(contains(text(), 'Details'))]",
             
-            # Последний шанс - любые кликабельные элементы с текстом
+            # Широкий поиск по классам btn (исключая проблемные)
+            "//button[contains(@class, 'btn') and not(contains(text(), 'Reload')) and not(contains(text(), 'Details'))]",
+            
+            # Последний шанс - любые кликабельные элементы с правильным текстом
             "//*[contains(text(), 'продолжить')]",
             "//*[contains(text(), 'отправить')]", 
             "//*[contains(text(), 'далее')]",
@@ -583,11 +790,21 @@ class MultiTransferAutomation:
                 if button and button.is_displayed():
                     button_text = button.text.strip() if hasattr(button, 'text') else ''
                     button_value = button.get_attribute('value') if button.get_attribute('value') else ''
-                    logger.info(f"✅ Found button with selector: {selector}")
-                    logger.info(f"   Button text: '{button_text}', value: '{button_value}'")
+                    button_tag = button.tag_name.lower()
+                    
+                    # Простая фильтрация - исключаем только явно вредные кнопки
+                    bad_buttons = ['reload', 'details', 'назад', 'back', 'cancel', 'отмена', 'close', 'закрыть']
+                    if (button_tag not in ['button', 'input', 'a'] or 
+                        len(button_text) > 100 or  # Очень длинный текст
+                        any(bad in button_text.lower() for bad in bad_buttons)):
+                        logger.debug(f"   Skipping: bad button - '{button_text}'")
+                        continue
+                    
+                    logger.info(f"✅ Found valid button with selector: {selector}")
+                    logger.info(f"   Button: tag='{button_tag}', text='{button_text}', value='{button_value}'")
                     
                     # Скроллим к кнопке и кликаем
-                    self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                    self._driver.execute_script("arguments[0].scrollIntoView(true);", button)
                     await asyncio.sleep(1)
                     
                     # Пытаемся кликнуть
@@ -600,7 +817,7 @@ class MultiTransferAutomation:
                         logger.warning(f"⚠️ Failed to click button with normal click: {click_error}")
                         # Попробуем JavaScript клик
                         try:
-                            self.driver.execute_script("arguments[0].click();", button)
+                            self._driver.execute_script("arguments[0].click();", button)
                             logger.info("✅ Successfully clicked button via JavaScript")
                             button_found = True
                             break
@@ -609,7 +826,7 @@ class MultiTransferAutomation:
                             # Попробуем через ActionChains
                             try:
                                 from selenium.webdriver.common.action_chains import ActionChains
-                                ActionChains(self.driver).move_to_element(button).click().perform()
+                                ActionChains(self._driver).move_to_element(button).click().perform()
                                 logger.info("✅ Successfully clicked button via ActionChains")
                                 button_found = True
                                 break
@@ -621,24 +838,82 @@ class MultiTransferAutomation:
                 continue
         
         if button_found:
-            logger.info("✅ Form return scenario handled successfully - waiting for result")
+            logger.info("✅ Button clicked - verifying page change...")
+            
+            # Запоминаем текущий URL перед кликом для проверки
+            url_before = self._driver.current_url
             await asyncio.sleep(3)  # Ждем обработку формы
-            self.take_screenshot_conditional("form_return_success.png")
+            url_after = self._driver.current_url
+            
+            # Проверяем изменилась ли страница или появились ли ошибки
+            error_indicators = [
+                "Паспорт РФ",
+                "Иностранный Паспорт", 
+                "Введите 4 цифры серии паспорта",
+                "Дата выдачи паспорта",
+                "Дата рождения"
+            ]
+            
+            page_source = self._driver.page_source
+            errors_found = [error for error in error_indicators if error in page_source]
+            
+            if errors_found:
+                logger.error(f"❌ Click failed - page returned to form validation! Errors: {errors_found}")
+                logger.error(f"📍 URL before: {url_before}")
+                logger.error(f"📍 URL after: {url_after}")
+                self.take_screenshot_conditional("form_return_failed_validation.png")
+                
+                # Возможно нужно заполнить поля заново или найти другую кнопку
+                logger.warning("⚠️ Attempting to handle validation errors...")
+                
+                # Пробуем найти и кликнуть другие кнопки продолжения
+                additional_selectors = [
+                    "//button[contains(@class, 'btn-primary') and (contains(text(), 'Продолжить') or contains(text(), 'ПРОДОЛЖИТЬ'))]",
+                    "//input[@type='submit' and (contains(@value, 'Продолжить') or contains(@value, 'ПРОДОЛЖИТЬ'))]",
+                    "//button[@type='submit']",
+                    "//*[@type='submit' and @form]"
+                ]
+                
+                retry_success = False
+                for selector in additional_selectors:
+                    try:
+                        retry_btn = self.find_element_fast(By.XPATH, selector, timeout=2)
+                        if retry_btn and retry_btn.is_displayed():
+                            logger.info(f"🔄 Trying alternative button: {selector}")
+                            self._driver.execute_script("arguments[0].click();", retry_btn)
+                            await asyncio.sleep(2)
+                            
+                            # Проверяем результат
+                            new_page_source = self._driver.page_source
+                            new_errors = [error for error in error_indicators if error in new_page_source]
+                            if not new_errors:
+                                logger.info("✅ Alternative button worked!")
+                                retry_success = True
+                                break
+                    except:
+                        continue
+                
+                if not retry_success:
+                    logger.error("❌ All retry attempts failed - form validation errors persist")
+                    raise Exception("Form return scenario failed - validation errors after button click")
+            else:
+                logger.info("✅ Form return scenario handled successfully - no validation errors")
+                self.take_screenshot_conditional("form_return_success.png")
         else:
             logger.error("❌ Could not find any button in form return scenario")
             
             # Диагностическая информация
             try:
                 # Получаем текущий URL
-                current_url = self.driver.current_url
+                current_url = self._driver.current_url
                 logger.error(f"📍 Current URL: {current_url}")
                 
                 # Получаем заголовок страницы
-                page_title = self.driver.title
+                page_title = self._driver.title
                 logger.error(f"📄 Page title: {page_title}")
                 
                 # Ищем все кнопки на странице для диагностики
-                all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                all_buttons = self._driver.find_elements(By.TAG_NAME, "button")
                 logger.error(f"🔍 Found {len(all_buttons)} button elements on page")
                 
                 for i, btn in enumerate(all_buttons[:10]):  # Показываем первые 10 кнопок
@@ -652,7 +927,7 @@ class MultiTransferAutomation:
                         pass
                 
                 # Ищем все input submit элементы
-                all_inputs = self.driver.find_elements(By.XPATH, "//input[@type='submit']")
+                all_inputs = self._driver.find_elements(By.XPATH, "//input[@type='submit']")
                 logger.error(f"🔍 Found {len(all_inputs)} input[type='submit'] elements")
                 
                 for i, inp in enumerate(all_inputs[:5]):  # Показываем первые 5 инпутов
