@@ -9,6 +9,9 @@ import random
 import time
 import re
 import os
+import tempfile
+import zipfile
+import json
 from typing import Dict, Any, Optional
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -21,12 +24,13 @@ logger = logging.getLogger(__name__)
 class MultiTransferAutomation:
     """ИСПРАВЛЕННАЯ автоматизация multitransfer.ru с поддержкой ВТОРОЙ КАПЧИ"""
     
-    def __init__(self, proxy: Optional[Dict[str, Any]] = None, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, proxy: Optional[Dict[str, Any]] = None, config: Optional[Dict[str, Any]] = None, proxy_manager=None):
         self.proxy = proxy
         self.config = config or {}
         self.base_url = "https://multitransfer.ru"
         self._driver = None
         self.captcha_solver = CaptchaSolver(config)
+        self.proxy_manager = proxy_manager
         
         # Оптимизированные настройки для скорости
         self.screenshot_enabled = config.get('development', {}).get('screenshots_enabled', False)
@@ -157,18 +161,47 @@ class MultiTransferAutomation:
                 options.add_argument('--no-sandbox')
                 options.add_argument('--disable-dev-shm-usage')
                 options.add_argument('--disable-gpu')
-                options.add_argument('--disable-extensions')
+                # НЕ отключаем extensions при использовании прокси (нужны для аутентификации)
+                if not self.proxy:
+                    options.add_argument('--disable-extensions')
                 options.add_argument('--disable-plugins')
                 options.add_argument('--disable-images')  # Отключаем загрузку изображений
-                options.add_argument('--disable-javascript')  # Частично отключаем JS (где возможно)
+                # НЕ отключаем JavaScript при использовании прокси (нужен для аутентификации)
+                if not self.proxy:
+                    options.add_argument('--disable-javascript')
                 options.add_argument('--window-size=1920,1080')
             # DEBUG MODE END
             
-            # Прокси
+            # Прокси с аутентификацией
             if self.proxy:
                 proxy_string = f"{self.proxy['ip']}:{self.proxy['port']}"
-                options.add_argument(f'--proxy-server=http://{proxy_string}')
-                logger.info(f"🌐 Using proxy: {proxy_string}")
+                
+                # Проверяем есть ли учетные данные для прокси
+                if self.proxy.get('user') and self.proxy.get('pass'):
+                    logger.info(f"🔐 Setting up authenticated proxy: {proxy_string}")
+                    
+                    # Создаем расширение для аутентификации
+                    auth_extension_path = self._create_proxy_auth_extension(
+                        self.proxy['user'], 
+                        self.proxy['pass']
+                    )
+                    
+                    if auth_extension_path:
+                        options.add_argument(f'--load-extension={auth_extension_path}')
+                        logger.info(f"✅ Added proxy auth extension")
+                    else:
+                        logger.error(f"❌ Failed to create auth extension, proxy may not work")
+                else:
+                    logger.warning(f"⚠️ Proxy credentials missing - using unauthenticated proxy")
+                
+                # Добавляем прокси сервер 
+                proxy_type = self.proxy.get('type', 'http').lower()
+                if proxy_type == 'socks5':
+                    options.add_argument(f'--proxy-server=socks5://{proxy_string}')
+                else:
+                    options.add_argument(f'--proxy-server=http://{proxy_string}')
+                    
+                logger.info(f"🌐 Using {proxy_type} proxy: {proxy_string}")
             
             # Быстрый user agent
             options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
@@ -242,6 +275,76 @@ class MultiTransferAutomation:
         except:
             return False
     
+    def _create_proxy_auth_extension(self, username: str, password: str) -> str:
+        """Создать Chrome расширение для аутентификации прокси"""
+        try:
+            manifest_json = {
+                "version": "1.0.0",
+                "manifest_version": 2,
+                "name": "Proxy Auth",
+                "permissions": [
+                    "proxy",
+                    "tabs",
+                    "unlimitedStorage",
+                    "storage",
+                    "<all_urls>",
+                    "webRequest",
+                    "webRequestBlocking"
+                ],
+                "background": {"scripts": ["background.js"], "persistent": True},
+                "minimum_chrome_version": "22.0.0"
+            }
+            
+            background_js = f"""
+            var config = {{
+                mode: "fixed_servers",
+                rules: {{
+                    singleProxy: {{
+                        scheme: "http",
+                        host: "{self.proxy['ip']}",
+                        port: parseInt("{self.proxy['port']}")
+                    }},
+                    bypassList: ["localhost"]
+                }}
+            }};
+            
+            chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+            
+            function callbackFn(details) {{
+                return {{
+                    authCredentials: {{
+                        username: "{username}",
+                        password: "{password}"
+                    }}
+                }};
+            }}
+            
+            chrome.webRequest.onAuthRequired.addListener(
+                callbackFn,
+                {{urls: ["<all_urls>"]}},
+                ['blocking']
+            );
+            """
+            
+            # Создаем временную папку для расширения
+            extension_dir = tempfile.mkdtemp()
+            extension_path = f"{extension_dir}/proxy_auth_extension"
+            os.makedirs(extension_path, exist_ok=True)
+            
+            # Записываем файлы расширения
+            with open(f"{extension_path}/manifest.json", 'w') as f:
+                json.dump(manifest_json, f)
+            
+            with open(f"{extension_path}/background.js", 'w') as f:
+                f.write(background_js)
+            
+            logger.info(f"✅ Created proxy auth extension: {extension_path}")
+            return extension_path
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create proxy auth extension: {e}")
+            return None
+    
     def take_screenshot_conditional(self, filename):
         """Скриншот только если включен в настройках"""
         if self.screenshot_enabled:
@@ -312,22 +415,145 @@ class MultiTransferAutomation:
             logger.error(f"❌ Error checking connection health: {e}")
             return False
     
+    async def switch_proxy_and_retry(self, operation_func, operation_name: str = "operation") -> Any:
+        """Переключить прокси и повторить операцию при ошибке соединения"""
+        if not self.proxy_manager:
+            logger.warning("⚠️ No proxy manager available for automatic switching")
+            return await operation_func()
+        
+        try:
+            # Сначала отмечаем текущий прокси как проблемный
+            old_proxy = self.proxy
+            if old_proxy and self.proxy_manager:
+                logger.info(f"🚫 Marking failed proxy: {old_proxy['ip']}:{old_proxy['port']}")
+                await self.proxy_manager.mark_proxy_failed(old_proxy['ip'], old_proxy['port'])
+            
+            # Получаем новый прокси
+            logger.info(f"🔄 Getting new proxy for {operation_name}")
+            new_proxy = await self.proxy_manager.get_proxy()
+            
+            if not new_proxy:
+                logger.warning("⚠️ No alternative proxy available - trying direct connection")
+                # Fallback на прямое соединение
+                return await self._try_direct_connection(operation_func, operation_name)
+            
+            # Проверяем что получили действительно новый прокси
+            if old_proxy and new_proxy['ip'] == old_proxy['ip'] and new_proxy['port'] == old_proxy['port']:
+                logger.warning(f"⚠️ Got same proxy again: {new_proxy['ip']}:{new_proxy['port']}")
+                # Пробуем получить еще один
+                new_proxy = await self.proxy_manager.get_proxy()
+                if not new_proxy:
+                    logger.warning("⚠️ No different proxy available - trying direct connection")
+                    return await self._try_direct_connection(operation_func, operation_name)
+                elif new_proxy['ip'] == old_proxy['ip'] and new_proxy['port'] == old_proxy['port']:
+                    logger.warning("⚠️ Still same proxy - trying direct connection")
+                    return await self._try_direct_connection(operation_func, operation_name)
+            
+            # Закрываем текущий браузер
+            if self._driver:
+                try:
+                    self._driver.quit()
+                except:
+                    pass
+                self._driver = None
+            
+            # Обновляем прокси и запускаем новый браузер
+            self.proxy = new_proxy
+            logger.info(f"🌐 Switched from {old_proxy['ip'] if old_proxy else 'direct'} to {new_proxy['ip']}:{new_proxy['port']}")
+            
+            # Запускаем браузер с новым прокси
+            await self._setup_driver()
+            
+            # КРИТИЧНО: Открываем сайт заново после переключения прокси
+            logger.info(f"🌐 Re-opening website with new proxy: {self.base_url}")
+            self._driver.get(self.base_url)
+            await asyncio.sleep(2)  # Даем время на загрузку
+            
+            # Проверяем что сайт загрузился
+            if not self.check_connection_health():
+                logger.error("❌ New proxy also failed to load site - trying direct connection")
+                return await self._try_direct_connection(operation_func, operation_name)
+            
+            logger.info("✅ Successfully switched proxy and loaded site")
+            
+            # Выполняем операцию с новым прокси
+            result = await operation_func()
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Proxy switch failed: {e} - trying direct connection")
+            return await self._try_direct_connection(operation_func, operation_name)
+    
+    async def _try_direct_connection(self, operation_func, operation_name: str) -> Any:
+        """Fallback на прямое соединение когда все прокси не работают"""
+        try:
+            logger.info(f"🌐 Trying direct connection for {operation_name}")
+            
+            # Закрываем текущий браузер
+            if self._driver:
+                try:
+                    self._driver.quit()
+                except:
+                    pass
+                self._driver = None
+            
+            # Отключаем прокси
+            old_proxy = self.proxy
+            self.proxy = None
+            logger.info(f"🔀 Switched from proxy {old_proxy['ip'] if old_proxy else 'unknown'} to direct connection")
+            
+            # Запускаем браузер без прокси
+            await self._setup_driver()
+            
+            # Открываем сайт напрямую
+            logger.info(f"🌐 Opening website directly: {self.base_url}")
+            self._driver.get(self.base_url)
+            await asyncio.sleep(2)  # Даем время на загрузку
+            
+            # Проверяем что сайт загрузился
+            if not self.check_connection_health():
+                logger.error("❌ Direct connection also failed")
+                raise Exception("Both proxy and direct connection failed")
+            
+            logger.info("✅ Successfully switched to direct connection")
+            
+            # Выполняем операцию с прямым соединением
+            result = await operation_func()
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Direct connection failed: {e}")
+            raise Exception(f"All connection methods failed: {e}")
+    
     async def retry_on_connection_failure(self, operation_func, max_retries: int = 2, operation_name: str = "operation"):
-        """Retry операции при потере соединения"""
+        """Retry операции при потере соединения с автоматическим переключением прокси"""
         for attempt in range(max_retries + 1):
             try:
                 # Проверяем соединение перед попыткой
                 if not self.check_connection_health():
                     if attempt < max_retries:
                         logger.warning(f"🔄 Connection unhealthy, retry {attempt + 1}/{max_retries} for {operation_name}")
-                        await asyncio.sleep(5)  # Ждем 5 секунд
                         
-                        # Пробуем обновить страницу
-                        try:
-                            self._driver.refresh()
-                            await asyncio.sleep(3)
-                        except:
-                            logger.warning("⚠️ Page refresh failed")
+                        # На первой попытке пробуем обновить страницу
+                        if attempt == 0:
+                            await asyncio.sleep(5)  # Ждем 5 секунд
+                            try:
+                                self._driver.refresh()
+                                await asyncio.sleep(3)
+                                continue
+                            except:
+                                logger.warning("⚠️ Page refresh failed")
+                        
+                        # На второй попытке переключаем прокси если доступен
+                        if attempt >= 1 and self.proxy_manager:
+                            try:
+                                return await self.switch_proxy_and_retry(operation_func, operation_name)
+                            except Exception as switch_error:
+                                logger.error(f"❌ Proxy switch failed: {switch_error}")
+                                
+                        await asyncio.sleep(5)
                         continue
                     else:
                         raise Exception(f"Connection failed after {max_retries} retries for {operation_name}")
@@ -358,12 +584,16 @@ class MultiTransferAutomation:
             if not driver:
                 return {'success': False, 'error': 'Failed to setup browser driver'}
             
-            # Открытие сайта с обработкой ошибок
-            try:
+            # Открытие сайта с обработкой ошибок и автоматическим переключением прокси
+            async def open_website():
                 logger.info(f"🌐 Opening website: {self.base_url}")
                 self._driver.get(self.base_url)
                 logger.info("✅ Website opened successfully")
                 self.take_screenshot_conditional("00_homepage.png")
+                return True
+            
+            try:
+                await self.retry_on_connection_failure(open_website, max_retries=2, operation_name="opening website")
             except Exception as e:
                 logger.error(f"❌ Failed to open website: {e}")
                 if "target window already closed" in str(e):
@@ -401,9 +631,18 @@ class MultiTransferAutomation:
                 self._driver = None
     
     async def _fast_country_and_amount(self, payment_data: Dict[str, Any]):
-        """БЫСТРЫЕ шаги 1-6: страна и сумма (цель: 8-10 секунд)"""
+        """БЫСТРЫЕ шаги 1-6: страна и сумма с автоматическим переключением прокси (цель: 8-10 секунд)"""
         logger.info("🏃‍♂️ Fast steps 1-6: country and amount")
         
+        # Выполняем шаги с автоматическим переключением прокси при ошибках соединения
+        await self.retry_on_connection_failure(
+            lambda: self._do_country_and_amount_steps(payment_data),
+            max_retries=2,
+            operation_name="country and amount selection"
+        )
+    
+    async def _do_country_and_amount_steps(self, payment_data: Dict[str, Any]):
+        """Внутренняя реализация шагов выбора страны и суммы"""
         # Шаг 1: Клик "ПЕРЕВЕСТИ ЗА РУБЕЖ" - БЕЗ ЗАДЕРЖЕК
         await asyncio.sleep(1)  # Минимальная загрузка страницы
         
@@ -552,9 +791,18 @@ class MultiTransferAutomation:
         logger.info("🏃‍♂️ Steps 1-6 completed FAST!")
     
     async def _fast_fill_forms(self, payment_data: Dict[str, Any]):
-        """БЫСТРОЕ заполнение форм 7-9 (цель: 8-10 секунд)"""
+        """БЫСТРОЕ заполнение форм 7-9 с автоматическим переключением прокси (цель: 8-10 секунд)"""
         logger.info("🏃‍♂️ Fast form filling steps 7-9")
         
+        # Выполняем заполнение форм с автоматическим переключением прокси при ошибках соединения
+        await self.retry_on_connection_failure(
+            lambda: self._do_fill_forms_steps(payment_data),
+            max_retries=2,
+            operation_name="form filling"
+        )
+    
+    async def _do_fill_forms_steps(self, payment_data: Dict[str, Any]):
+        """Внутренняя реализация заполнения форм"""
         # Шаг 7: Карта получателя - МГНОВЕННО
         card_number = payment_data.get('recipient_card', '')
         for selector in self.selectors['recipient_card']:
@@ -617,8 +865,18 @@ class MultiTransferAutomation:
         logger.info("🏃‍♂️ Forms filled FAST!")
     
     async def _fast_submit_and_captcha(self):
-        """БЫСТРАЯ отправка и решение ПЕРВОЙ капчи 10-11 (цель: до 35 секунд с капчей)"""
+        """БЫСТРАЯ отправка и решение ПЕРВОЙ капчи с автоматическим переключением прокси (цель: до 35 секунд с капчей)"""
         logger.info("🏃‍♂️ Fast submit and FIRST captcha steps 10-11")
+        
+        # Выполняем отправку и решение капчи с автоматическим переключением прокси при ошибках соединения
+        await self.retry_on_connection_failure(
+            lambda: self._do_submit_and_captcha_steps(),
+            max_retries=2,
+            operation_name="submit and captcha"
+        )
+    
+    async def _do_submit_and_captcha_steps(self):
+        """Внутренняя реализация отправки и решения капчи"""
         
         # Шаг 10: Финальная отправка
         buttons = self.find_elements_fast(By.TAG_NAME, "button")

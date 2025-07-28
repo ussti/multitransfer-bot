@@ -199,17 +199,32 @@ class ProxyManager:
                             # API возвращает словарь вида {"11": {...}, "22": {...}}
                             if isinstance(proxy_list, dict):
                                 for proxy_id, proxy_info in proxy_list.items():
+                                    # Пробуем разные возможные названия полей для учетных данных
+                                    proxy_user = (proxy_info.get('user') or 
+                                                 proxy_info.get('username') or 
+                                                 proxy_info.get('login', ''))
+                                    proxy_pass = (proxy_info.get('pass') or 
+                                                 proxy_info.get('password') or 
+                                                 proxy_info.get('pwd', ''))
+                                    
                                     proxy_data = {
                                         'id': proxy_info.get('id', proxy_id),
                                         'ip': proxy_info.get('ip', proxy_info.get('host', '')),
                                         'port': str(proxy_info.get('port', '')),
-                                        'user': proxy_info.get('user', ''),
-                                        'pass': proxy_info.get('pass', ''),
+                                        'user': proxy_user,
+                                        'pass': proxy_pass,
                                         'country': proxy_info.get('country', 'ru'),
                                         'type': proxy_info.get('type', 'http'),
                                         'date_end': proxy_info.get('date_end', ''),
                                         'active': proxy_info.get('active', '0') == '1'  # Строка!
                                     }
+                                    
+                                    # DEBUG: Логируем учетные данные для диагностики
+                                    logger.debug(f"🔍 Proxy {proxy_data['ip']} credentials: user='{proxy_user}', pass='{proxy_pass[:3]}***'")
+                                    
+                                    # Предупреждаем если учетные данные отсутствуют
+                                    if not proxy_user or not proxy_pass:
+                                        logger.warning(f"⚠️ Proxy {proxy_data['ip']} missing credentials - user: '{proxy_user}', pass: '{proxy_pass[:3] if proxy_pass else 'empty'}***'")
                                     
                                     # Добавляем только активные прокси с валидными данными
                                     if proxy_data['active'] and proxy_data['ip'] and proxy_data['port']:

@@ -113,8 +113,8 @@ class PaymentService:
             logger.info(f"🚀 Starting browser automation...")
             logger.info(f"📄 Automation data: Country={user_requisites.country}, Bank={user_requisites.bank}, Card={user_requisites.recipient_card[:4]}****")
             
-            # Запускаем браузерную автоматизацию
-            automation = MultiTransferAutomation(proxy=proxy, config=self.config.to_dict())
+            # Запускаем браузерную автоматизацию с поддержкой автоматического переключения прокси
+            automation = MultiTransferAutomation(proxy=proxy, config=self.config.to_dict(), proxy_manager=self.proxy_manager)
             result = await automation.create_payment(automation_data)
             
             # Обновляем запись платежа
