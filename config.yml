@@ -13,12 +13,28 @@ database:
   max_overflow: 10
   
 proxy:
-  provider: "${PROXY_PROVIDER}"
-  api_key: "${PROXY_API_KEY}"
-  country: "${PROXY_COUNTRY}"
+  # Proxy6.net static configuration
+  enabled: true
+  api_key: "dummy_key"  # Не используется для статических прокси
+  country: "ru"
+  
+  # Deprecated multi-provider config (ProxyLine disabled)
+  # primary:
+  #   provider: "proxyline"
+  #   api_key: "eJxEqnLC4NOZBmPUmeF5OjkxDvl320T9XQNbGaDO"
+  #   country: "ru"
+  #   type: "http"
+  #   
+  # fallback:
+  #   provider: "proxy6"
+  #   api_key: "${PROXY_API_KEY}"
+  #   country: "${PROXY_COUNTRY}"
+  
+  # Common settings
   rotation_enabled: "${PROXY_ROTATION_ENABLED}"
   max_failures_per_proxy: "${PROXY_MAX_FAILURES}"
   check_interval: 300
+  reset_to_primary_interval: 600  # Reset to primary every 10 minutes
   
 # API-only captcha configuration (без плагина)
 captcha:

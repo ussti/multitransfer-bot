@@ -67,6 +67,34 @@ class Proxy6Provider:
         self.api_key = api_key
         self.base_url = "https://px6.link/api"
         self.session = session
+        self._current_proxy_index = 0
+        self._failed_proxies = set()
+        
+        # Статические прокси от Proxy6.net
+        self._static_proxies = [
+            {
+                'id': 'proxy6_1',
+                'ip': '45.10.65.50',
+                'port': '8000',
+                'user': '2G4L9A',
+                'pass': 'pphKeV',
+                'country': 'ru',
+                'type': 'socks5',
+                'active': True
+            },
+            {
+                'id': 'proxy6_2', 
+                'ip': '45.135.31.34',
+                'port': '8000',
+                'user': 'gzqPrg',
+                'pass': 'SJHhke',
+                'country': 'ru',
+                'type': 'socks5',
+                'active': True
+            }
+        ]
+        
+        logger.info(f"✅ Proxy6 provider initialized with {len(self._static_proxies)} static proxies")
         self._own_session = session is None
         
         # Rate limiting (max 3 requests per second)
@@ -185,36 +213,45 @@ class Proxy6Provider:
                          descr: Optional[str] = None,
                          page: int = 1,
                          limit: int = 1000) -> List[ProxyInfo]:
-        """Get list of purchased proxies"""
-        params = {
-            "state": state.value,
-            "page": page,
-            "limit": limit
-        }
-        if descr:
-            params["descr"] = descr
-        
-        result = await self._make_request("getproxy", params)
+        """Get list of static proxies with rotation"""
         proxies = []
         
-        proxy_list = result.get("list", {})
-        for proxy_id, proxy_data in proxy_list.items():
-            proxy_info = ProxyInfo(
-                id=proxy_data.get("id", proxy_id),
-                ip=proxy_data.get("ip", ""),
-                host=proxy_data.get("host", ""),
-                port=proxy_data.get("port", ""),
-                user=proxy_data.get("user", ""),
-                password=proxy_data.get("pass", ""),
-                type=proxy_data.get("type", "http"),
-                country=proxy_data.get("country", ""),
-                date=proxy_data.get("date", ""),
-                date_end=proxy_data.get("date_end", ""),
-                active=bool(int(proxy_data.get("active", 0)))
-            )
-            proxies.append(proxy_info)
+        # Фильтруем активные прокси (исключаем неудачные)
+        available_proxies = []
+        for proxy_data in self._static_proxies:
+            if not proxy_data['active']:
+                continue
+            
+            proxy_key = f"{proxy_data['ip']}:{proxy_data['port']}"
+            if proxy_key in self._failed_proxies:
+                continue
+                
+            available_proxies.append(proxy_data)
         
-        logger.info(f"📋 Retrieved {len(proxies)} proxies from Proxy6")
+        if not available_proxies:
+            logger.warning("⚠️ No available Proxy6 proxies (all failed?)")
+            return []
+        
+        # Round-robin ротация - возвращаем один прокси
+        selected_proxy_data = available_proxies[self._current_proxy_index % len(available_proxies)]
+        self._current_proxy_index += 1
+        
+        proxy_info = ProxyInfo(
+            id=selected_proxy_data['id'],
+            ip=selected_proxy_data['ip'],
+            host=selected_proxy_data['ip'],
+            port=selected_proxy_data['port'],
+            user=selected_proxy_data['user'],
+            password=selected_proxy_data['pass'],
+            type=selected_proxy_data['type'],
+            country=selected_proxy_data['country'],
+            date="2025-01-01 00:00:00",
+            date_end="2025-12-31 23:59:59",
+            active=True
+        )
+        proxies.append(proxy_info)
+        
+        logger.info(f"✅ Proxy6: Selected proxy {proxy_info.ip}:{proxy_info.port} (rotation {self._current_proxy_index}/{len(available_proxies)})")
         return proxies
     
     async def buy_proxies(self,
@@ -303,6 +340,92 @@ class Proxy6NetworkError(Exception):
 class Proxy6ConfigError(Exception):
     """Configuration error for Proxy6.net"""
     pass
+
+
+
+class MultiProviderManager:
+    """Менеджер для работы с несколькими провайдерами прокси"""
+    
+    def __init__(self, primary_provider, fallback_provider):
+        self.primary_provider = primary_provider
+        self.fallback_provider = fallback_provider
+        self.current_provider = 'primary'
+        
+        logger.info("🔄 Multi-provider manager initialized")
+        logger.info(f"🏆 Primary: {type(primary_provider).__name__}")
+        logger.info(f"🔄 Fallback: {type(fallback_provider).__name__}")
+    
+    async def get_proxy(self, proxy_type: str = 'http') -> Optional[Dict[str, Any]]:
+        """Get proxy from primary provider, fallback to secondary if needed"""
+        
+        # Сначала пробуем основного провайдера
+        try:
+            if self.current_provider == 'primary':
+                logger.debug("🏆 Trying primary provider (ProxyLine)")
+                proxies = await self.primary_provider.get_proxies(proxy_type)
+                if proxies:
+                    proxy = proxies[0]  # Берем первый доступный
+                    proxy['provider'] = 'proxyline'
+                    logger.info(f"✅ Got proxy from ProxyLine: {proxy['ip']}:{proxy['port']}")
+                    return proxy
+                else:
+                    logger.warning("⚠️ No proxies available from primary provider")
+            
+        except Exception as e:
+            logger.error(f"❌ Primary provider failed: {e}")
+        
+        # Переключаемся на fallback провайдер
+        try:
+            logger.warning("🔄 Switching to fallback provider (Proxy6)")
+            self.current_provider = 'fallback'
+            
+            if hasattr(self.fallback_provider, 'get_proxy'):
+                # Для старого ProxyManager
+                proxy = await self.fallback_provider.get_proxy()
+            else:
+                # Для нового Proxy6Provider
+                proxies = await self.fallback_provider.get_proxies()
+                proxy = proxies[0] if proxies else None
+            
+            if proxy:
+                proxy['provider'] = 'proxy6'
+                logger.info(f"✅ Got fallback proxy from Proxy6: {proxy['ip']}:{proxy['port']}")
+                return proxy
+            else:
+                logger.error("❌ No proxies available from fallback provider")
+                
+        except Exception as e:
+            logger.error(f"❌ Fallback provider also failed: {e}")
+        
+        logger.error("❌ All proxy providers failed")
+        return None
+    
+    async def mark_proxy_failed(self, ip: str, port: str):
+        """Mark proxy as failed in appropriate provider"""
+        try:
+            if self.current_provider == 'primary':
+                self.primary_provider.mark_proxy_failed(f"{ip}:{port}")
+            else:
+                await self.fallback_provider.mark_proxy_failed(ip, port)
+        except Exception as e:
+            logger.error(f"❌ Failed to mark proxy as failed: {e}")
+    
+    async def mark_proxy_success(self, ip: str, port: str):
+        """Mark proxy as successful in appropriate provider"""
+        try:
+            if self.current_provider == 'primary':
+                self.primary_provider.mark_proxy_success(f"{ip}:{port}")
+            else:
+                # Proxy6 не имеет метода mark_proxy_success
+                pass
+        except Exception as e:
+            logger.debug(f"Note: Could not mark proxy success: {e}")
+    
+    def reset_to_primary(self):
+        """Reset to primary provider (call periodically)"""
+        if self.current_provider != 'primary':
+            logger.info("🔄 Resetting to primary provider")
+            self.current_provider = 'primary'
 
 
 # Error code mappings for better handling

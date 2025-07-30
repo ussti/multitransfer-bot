@@ -14,6 +14,7 @@ import zipfile
 import json
 from typing import Dict, Any, Optional
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
@@ -161,59 +162,117 @@ class MultiTransferAutomation:
                 options.add_argument('--no-sandbox')
                 options.add_argument('--disable-dev-shm-usage')
                 options.add_argument('--disable-gpu')
+                # КРИТИЧНО: Отключаем детекцию автоматизации (рекомендация Proxy6)
+                options.add_argument('--disable-blink-features=AutomationControlled')
+                # ИСПРАВЛЕНО: НЕ используем постоянный профиль - он кэширует авторизацию прокси
+                # temp_profile = tempfile.mkdtemp(prefix="chrome_profile_")
+                # options.add_argument(f'--user-data-dir={temp_profile}')
+                options.add_argument('--incognito')  # Всегда свежая сессия
+                logger.info("🔧 PROXY MODE: Using incognito mode for fresh proxy auth")
                 # НЕ отключаем extensions при использовании прокси (нужны для аутентификации)
                 if not self.proxy:
                     options.add_argument('--disable-extensions')
                 options.add_argument('--disable-plugins')
                 options.add_argument('--disable-images')  # Отключаем загрузку изображений
-                # НЕ отключаем JavaScript при использовании прокси (нужен для аутентификации)
-                if not self.proxy:
-                    options.add_argument('--disable-javascript')
+                # ИСПРАВЛЕНО: ВСЕГДА включаем JavaScript для загрузки банков
+                # if not self.proxy:
+                #     options.add_argument('--disable-javascript')
+                logger.info("🔧 PROXY MODE: JavaScript enabled for dynamic content loading")
                 options.add_argument('--window-size=1920,1080')
             # DEBUG MODE END
             
-            # Прокси с аутентификацией
+            # ИСПРАВЛЕНО: Упрощенная прокси авторизация через встроенные возможности Chrome
             if self.proxy:
                 proxy_string = f"{self.proxy['ip']}:{self.proxy['port']}"
+                logger.info(f"🔐 Setting up proxy: {proxy_string}")
                 
-                # Проверяем есть ли учетные данные для прокси
-                if self.proxy.get('user') and self.proxy.get('pass'):
-                    logger.info(f"🔐 Setting up authenticated proxy: {proxy_string}")
-                    
-                    # Создаем расширение для аутентификации
-                    auth_extension_path = self._create_proxy_auth_extension(
-                        self.proxy['user'], 
-                        self.proxy['pass']
-                    )
-                    
-                    if auth_extension_path:
-                        options.add_argument(f'--load-extension={auth_extension_path}')
-                        logger.info(f"✅ Added proxy auth extension")
-                    else:
-                        logger.error(f"❌ Failed to create auth extension, proxy may not work")
-                else:
-                    logger.warning(f"⚠️ Proxy credentials missing - using unauthenticated proxy")
-                
-                # Добавляем прокси сервер 
+                # Добавляем прокси сервер с встроенной авторизацией
                 proxy_type = self.proxy.get('type', 'http').lower()
-                if proxy_type == 'socks5':
-                    options.add_argument(f'--proxy-server=socks5://{proxy_string}')
+                
+                if self.proxy.get('user') and self.proxy.get('pass'):
+                    # SOCKS5 ПОДХОД: Используем SOCKS5 прокси для лучшей совместимости
+                    if proxy_type == 'socks5':
+                        logger.info("🔧 Using SOCKS5 proxy with improved Chrome args...")
+                        # Возвращаемся к Chrome аргументам, но с улучшениями
+                        proxy_url_with_auth = f"socks5://{self.proxy['user']}:{self.proxy['pass']}@{proxy_string}"
+                        options.add_argument(f'--proxy-server={proxy_url_with_auth}')
+                        
+                        # Добавляем флаги для решения ERR_NO_SUPPORTED_PROXIES
+                        options.add_argument('--proxy-bypass-list=<-loopback>')
+                        options.add_argument('--disable-proxy-certificate-handler')
+                        options.add_argument('--disable-extensions-http-throttling')
+                        
+                        logger.info(f"✅ SOCKS5 proxy configured: socks5://***:***@{proxy_string}")
+                    else:
+                        # HTTP fallback
+                        logger.info("🔧 Using HTTP proxy with built-in authentication...")
+                        options.add_argument(f'--proxy-server={proxy_type}://{proxy_string}')
+                        options.add_argument(f'--proxy-auth=auto')
+                        options.add_argument(f'--auth-server-whitelist=*')
+                        options.add_argument(f'--auth-negotiate-delegate-whitelist=*')
+                    
+                    # Сохраняем credentials для использования в обработчике
+                    self._proxy_user = self.proxy['user']
+                    self._proxy_pass = self.proxy['pass']
+                    
+                    logger.info(f"✅ Built-in proxy auth configured for: {proxy_string}")
                 else:
-                    options.add_argument(f'--proxy-server=http://{proxy_string}')
+                    # Без авторизации
+                    if proxy_type == 'socks5':
+                        options.add_argument(f'--proxy-server=socks5://{proxy_string}')
+                        logger.info(f"🌐 Using unauthenticated SOCKS5 proxy: {proxy_string}")
+                    else:
+                        options.add_argument(f'--proxy-server=http://{proxy_string}')
+                        logger.warning(f"⚠️ No proxy credentials - using unauthenticated HTTP proxy")
                     
                 logger.info(f"🌐 Using {proxy_type} proxy: {proxy_string}")
             
             # Быстрый user agent
             options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
             
-            # Создаем драйвер с быстрыми настройками
+            # Дополнительные флаги для стабильности с прокси (рекомендации Proxy6)
+            if self.proxy:
+                logger.info("🔧 Applying Proxy6 stability recommendations")
+                options.add_argument('--disable-features=VizDisplayCompositor')
+                options.add_argument('--disable-ipc-flooding-protection')
+                options.add_argument('--disable-renderer-backgrounding')
+                options.add_argument('--disable-backgrounding-occluded-windows')
+                options.add_argument('--disable-background-networking')
+                # Дополнительные флаги для стабильности соединения
+                options.add_argument('--disable-background-timer-throttling')
+                options.add_argument('--disable-renderer-backgrounding')
+                options.add_argument('--disable-backgrounding-occluded-windows')
+                options.add_argument('--disable-client-side-phishing-detection')
+                options.add_argument('--disable-component-update')
+                options.add_argument('--disable-default-apps')
+                options.add_argument('--disable-domain-reliability')
+                options.add_argument('--disable-features=TranslateUI')
+                options.add_argument('--disable-hang-monitor')
+                options.add_argument('--disable-popup-blocking')
+                options.add_argument('--disable-prompt-on-repost')
+                options.add_argument('--disable-sync')
+                # ИСПРАВЛЕНО: НЕ используем headless с прокси - может блокировать JavaScript
+                # if not visual_debug:
+                #     options.add_argument('--headless=new')
+                #     logger.info("🔧 Using new headless mode for proxy stability")
+                logger.info("🔧 PROXY MODE: Using visual mode for JavaScript compatibility")
+                # Увеличиваем таймауты для DNS и соединения
+                options.add_argument('--aggressive-cache-discard')
+                options.add_argument('--max_old_space_size=4096')
+            
+            # Создаем драйвер с улучшенными настройками
+            logger.info("🚀 Creating Chrome driver with Proxy6 optimizations")
+            
             self._driver = uc.Chrome(options=options)
             
-            # Адаптивные таймауты в зависимости от использования прокси
+            # Адаптивные таймауты в зависимости от использования прокси (увеличены после рекомендаций Proxy6)
             if self.proxy:
-                self._driver.implicitly_wait(10)  # Больше времени для прокси
-                self._driver.set_page_load_timeout(60)  # 60 сек для загрузки через прокси
-                logger.info("⏱️ PROXY MODE: Extended timeouts enabled (10s implicit, 60s page load)")
+                self._driver.implicitly_wait(20)  # Увеличено для стабильности прокси на macOS
+                self._driver.set_page_load_timeout(120)  # Увеличено для Chrome extension auth на macOS+VPN
+                logger.info("⏱️ PROXY MODE: Extended timeouts for macOS stability (20s implicit, 120s page load)")
+                # Дополнительная задержка для инициализации расширения
+                await asyncio.sleep(3)
+                logger.info("⏳ PROXY MODE: Extension initialization delay completed")
             else:
                 self._driver.implicitly_wait(3)   # Быстро без прокси
                 self._driver.set_page_load_timeout(30)  # 30 сек без прокси
@@ -223,6 +282,45 @@ class MultiTransferAutomation:
             if visual_debug:
                 logger.info("⏱️ DEBUG MODE: Adding extra delay for browser stability")
                 await asyncio.sleep(2)
+            
+            # ИСПРАВЛЕНО: Простая проверка встроенной прокси авторизации  
+            if self.proxy:
+                logger.info("🔐 PROXY MODE: Testing built-in proxy authentication...")
+                
+                # Короткая задержка для инициализации
+                await asyncio.sleep(3)
+                
+                # Быстрый тест прокси
+                try:
+                    logger.info("🌐 PROXY TEST: Quick multitransfer.ru test...")
+                    self._driver.get("https://multitransfer.ru")
+                    await asyncio.sleep(5)
+                    
+                    page_length = len(self._driver.page_source)
+                    logger.info(f"🔍 PROXY TEST: Content length={page_length}")
+                    
+                    if page_length < 1000:
+                        # Для SOCKS5 диалог не нужен - авторизация через URL
+                        if self.proxy.get('type', 'http').lower() == 'socks5':
+                            logger.warning("⚠️ SOCKS5 auth failed - proxy may be blocked or invalid")
+                        else:
+                            # Только для HTTP пробуем диалог
+                            logger.warning("⚠️ HTTP auth may have failed - checking for dialog...")
+                            await self._handle_proxy_auth_dialog()
+                            await asyncio.sleep(3)
+                            
+                            # Повторная проверка
+                            page_length = len(self._driver.page_source)
+                            logger.info(f"🔍 PROXY TEST: After manual auth length={page_length}")
+                    
+                    # Возвращаемся для штатного процесса
+                    self._driver.get("about:blank")
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"❌ PROXY TEST: Failed: {e}")
+                    # Пробуем обработать диалог как fallback
+                    await self._handle_proxy_auth_dialog()
             
             logger.info("✅ Fast Chrome driver ready")
             return self._driver
@@ -275,75 +373,58 @@ class MultiTransferAutomation:
         except:
             return False
     
-    def _create_proxy_auth_extension(self, username: str, password: str) -> str:
-        """Создать Chrome расширение для аутентификации прокси"""
+    async def monitor_verification_modal(self):
+        """НЕПРЕРЫВНЫЙ мониторинг модального окна 'Проверка данных' - может появиться в любой момент"""
         try:
-            manifest_json = {
-                "version": "1.0.0",
-                "manifest_version": 2,
-                "name": "Proxy Auth",
-                "permissions": [
-                    "proxy",
-                    "tabs",
-                    "unlimitedStorage",
-                    "storage",
-                    "<all_urls>",
-                    "webRequest",
-                    "webRequestBlocking"
-                ],
-                "background": {"scripts": ["background.js"], "persistent": True},
-                "minimum_chrome_version": "22.0.0"
-            }
+            # Быстрая проверка на наличие модального окна
+            modal_selectors = [
+                "//div[contains(text(), 'Проверка данных')]",
+                "//*[contains(text(), 'Проверьте данные получателя')]",
+                "//*[contains(text(), 'Проверка данных')]",
+                "//h2[contains(text(), 'Проверка данных')]",
+                "//h3[contains(text(), 'Проверка данных')]",
+                "//div[contains(@class, 'modal') and contains(., 'Проверка данных')]"
+            ]
             
-            background_js = f"""
-            var config = {{
-                mode: "fixed_servers",
-                rules: {{
-                    singleProxy: {{
-                        scheme: "http",
-                        host: "{self.proxy['ip']}",
-                        port: parseInt("{self.proxy['port']}")
-                    }},
-                    bypassList: ["localhost"]
-                }}
-            }};
+            for selector in modal_selectors:
+                try:
+                    # ИСПРАВЛЕНО: Используем быстрый поиск с timeout=1 секунда
+                    element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                    if element and element.is_displayed():
+                        logger.warning("🚨 URGENT: 'Проверка данных' modal detected during operation!")
+                        return True
+                except:
+                    continue
             
-            chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
-            
-            function callbackFn(details) {{
-                return {{
-                    authCredentials: {{
-                        username: "{username}",
-                        password: "{password}"
-                    }}
-                }};
-            }}
-            
-            chrome.webRequest.onAuthRequired.addListener(
-                callbackFn,
-                {{urls: ["<all_urls>"]}},
-                ['blocking']
-            );
-            """
-            
-            # Создаем временную папку для расширения
-            extension_dir = tempfile.mkdtemp()
-            extension_path = f"{extension_dir}/proxy_auth_extension"
-            os.makedirs(extension_path, exist_ok=True)
-            
-            # Записываем файлы расширения
-            with open(f"{extension_path}/manifest.json", 'w') as f:
-                json.dump(manifest_json, f)
-            
-            with open(f"{extension_path}/background.js", 'w') as f:
-                f.write(background_js)
-            
-            logger.info(f"✅ Created proxy auth extension: {extension_path}")
-            return extension_path
+            return False
             
         except Exception as e:
-            logger.error(f"❌ Failed to create proxy auth extension: {e}")
-            return None
+            logger.debug(f"Modal monitoring error: {e}")
+            return False
+    
+    async def handle_verification_modal_if_present(self):
+        """Обработка модального окна 'Проверка данных' если оно обнаружено"""
+        try:
+            modal_detected = await self.monitor_verification_modal()
+            if modal_detected:
+                logger.info("🚨 HANDLING: 'Проверка данных' modal found - processing immediately")
+                
+                # Делаем скриншот
+                self.take_screenshot_conditional("urgent_modal_detected.png")
+                
+                # Вызываем полную обработку модального окна
+                await self._fast_handle_modal_with_second_captcha()
+                
+                logger.info("✅ HANDLED: 'Проверка данных' modal processed")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling verification modal: {e}")
+            return False
+
+    
     
     def take_screenshot_conditional(self, filename):
         """Скриншот только если включен в настройках"""
@@ -381,6 +462,263 @@ class MultiTransferAutomation:
         except Exception as e:
             logger.warning(f"⚠️ Failed to save debug screenshot: {e}")
     
+    def _create_proxy_auth_extension(self, username: str, password: str) -> str:
+        """
+        Создает Chrome extension для автоматической авторизации прокси
+        
+        Args:
+            username: Имя пользователя прокси
+            password: Пароль прокси
+            
+        Returns:
+            Путь к созданному расширению (.crx файлу)
+        """
+        try:
+            logger.info(f"🔧 Creating proxy auth extension for user: {username}")
+            
+            # Создаем временную папку для extension
+            extension_dir = tempfile.mkdtemp(prefix="proxy_auth_")
+            
+            # Manifest файл для Chrome extension
+            manifest = {
+                "version": "1.0.0",
+                "manifest_version": 2,
+                "name": "Chrome Proxy Auth",
+                "permissions": [
+                    "proxy",
+                    "tabs",
+                    "unlimitedStorage",
+                    "storage",
+                    "<all_urls>",
+                    "webRequest",
+                    "webRequestBlocking"
+                ],
+                "background": {
+                    "scripts": ["background.js"]
+                },
+                "minimum_chrome_version": "22.0.0"
+            }
+            
+            # Улучшенный Background script для стабильной авторизации (рекомендации Proxy6)
+            background_js = f"""
+console.log('Proxy6 Auth Extension: Starting');
+
+var config = {{
+    mode: "fixed_servers",
+    rules: {{
+        singleProxy: {{
+            scheme: "http",
+            host: "{self.proxy['ip']}",
+            port: parseInt("{self.proxy['port']}")
+        }},
+        bypassList: ["localhost", "127.0.0.1", "::1"]
+    }}
+}};
+
+// Настройка прокси с обработкой ошибок
+chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{
+    if (chrome.runtime.lastError) {{
+        console.error('Proxy6 Auth Extension: Error setting proxy:', chrome.runtime.lastError);
+    }} else {{
+        console.log('Proxy6 Auth Extension: Proxy configured successfully');
+    }}
+}});
+
+// Обработчик авторизации с логированием
+function callbackFn(details) {{
+    console.log('Proxy6 Auth Extension: Auth request for', details.url);
+    return {{
+        authCredentials: {{
+            username: "{username}",
+            password: "{password}"
+        }}
+    }};
+}}
+
+// Подписка на события авторизации
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {{urls: ["<all_urls>"]}},
+    ['blocking']
+);
+
+console.log('Proxy6 Auth Extension: Ready');
+"""
+            
+            # Сохраняем файлы extension
+            with open(os.path.join(extension_dir, "manifest.json"), 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2)
+            
+            with open(os.path.join(extension_dir, "background.js"), 'w', encoding='utf-8') as f:
+                f.write(background_js)
+            
+            # Создаем .crx архив
+            extension_path = os.path.join(extension_dir, "proxy_auth.crx")
+            
+            with zipfile.ZipFile(extension_path, 'w') as zf:
+                zf.write(os.path.join(extension_dir, "manifest.json"), "manifest.json")
+                zf.write(os.path.join(extension_dir, "background.js"), "background.js")
+            
+            logger.info(f"✅ Proxy auth extension created: {extension_path}")
+            return extension_path
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create proxy auth extension: {e}")
+            raise Exception(f"Proxy auth extension creation failed: {e}")
+    
+    async def _handle_proxy_auth_dialog(self):
+        """
+        Обработка диалога авторизации прокси Chrome
+        """
+        try:
+            logger.info("🔍 Looking for Chrome proxy authentication dialog...")
+            
+            # Даем время диалогу появиться
+            await asyncio.sleep(3)
+            
+            # Пробуем разные способы обработки диалога
+            
+            # Способ 1: Отправляем клавиши прямо в активное окно
+            try:
+                logger.info("🔤 Trying to fill auth via direct key sending...")
+                
+                # Нажимаем Tab чтобы убедиться что в поле username
+                self._driver.switch_to.active_element.send_keys(Keys.TAB)
+                await asyncio.sleep(0.5)
+                
+                # Очищаем и вводим username
+                self._driver.switch_to.active_element.clear()
+                self._driver.switch_to.active_element.send_keys(self.proxy['user'])
+                await asyncio.sleep(0.5)
+                
+                # Переходим к полю password
+                self._driver.switch_to.active_element.send_keys(Keys.TAB)
+                await asyncio.sleep(0.5)
+                
+                # Вводим password
+                self._driver.switch_to.active_element.send_keys(self.proxy['pass'])
+                await asyncio.sleep(0.5)
+                
+                # Нажимаем Enter или ищем кнопку Sign In
+                self._driver.switch_to.active_element.send_keys(Keys.ENTER)
+                
+                logger.info("✅ Proxy credentials sent via direct key input")
+                await asyncio.sleep(2)
+                return True
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Direct key method failed: {e}")
+            
+            # Способ 2: Попробуем alert
+            try:
+                alert = self._driver.switch_to.alert
+                alert_text = alert.text
+                logger.info(f"🔍 Found alert: {alert_text}")
+                
+                if "proxy" in alert_text.lower() or "username" in alert_text.lower():
+                    # Для базовой HTTP аутентификации
+                    credentials = f"{self.proxy['user']}:{self.proxy['pass']}"
+                    alert.send_keys(credentials)
+                    alert.accept()
+                    logger.info("✅ Credentials sent via alert")
+                    return True
+                else:
+                    alert.dismiss()
+                    
+            except Exception as e:
+                logger.debug(f"No alert found: {e}")
+            
+            # Способ 3: Ищем в DOM (fallback)
+            try:
+                logger.info("🔍 Searching for auth fields in DOM...")
+                username_selectors = [
+                    "input[type='text']",
+                    "input[placeholder*='username']",
+                    "input[placeholder*='Username']",
+                    "input[name='username']",
+                    "#username"
+                ]
+                
+                password_selectors = [
+                    "input[type='password']",
+                    "input[placeholder*='password']", 
+                    "input[placeholder*='Password']",
+                    "input[name='password']",
+                    "#password"
+                ]
+                
+                username_field = None
+                password_field = None
+                
+                # Ищем поля ввода
+                for selector in username_selectors:
+                    try:
+                        username_field = self._driver.find_element(By.CSS_SELECTOR, selector)
+                        if username_field.is_displayed():
+                            break
+                    except:
+                        continue
+                
+                for selector in password_selectors:
+                    try:
+                        password_field = self._driver.find_element(By.CSS_SELECTOR, selector)
+                        if password_field.is_displayed():
+                            break
+                    except:
+                        continue
+                
+                if username_field and password_field:
+                    logger.info("🔍 Found proxy auth modal fields")
+                    
+                    # Заполняем поля
+                    username_field.clear()
+                    username_field.send_keys(self.proxy['user'])
+                    
+                    password_field.clear()
+                    password_field.send_keys(self.proxy['pass'])
+                    
+                    # Ищем кнопку отправки
+                    submit_selectors = [
+                        "button[type='submit']",
+                        "input[type='submit']",
+                        "button:contains('Sign In')",
+                        "button:contains('OK')",
+                        "button:contains('Login')"
+                    ]
+                    
+                    submit_button = None
+                    for selector in submit_selectors:
+                        try:
+                            submit_button = self._driver.find_element(By.CSS_SELECTOR, selector)
+                            if submit_button.is_displayed():
+                                break
+                        except:
+                            continue
+                    
+                    if submit_button:
+                        submit_button.click()
+                        logger.info("✅ Proxy credentials submitted via DOM")
+                        return True
+                    else:
+                        # Fallback: нажимаем Enter
+                        password_field.send_keys(Keys.ENTER)
+                        logger.info("✅ Proxy credentials submitted via Enter")
+                        return True
+                        
+                else:
+                    logger.warning("⚠️ No auth fields found in DOM")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ DOM search failed: {e}")
+            
+            # Если ничего не сработало
+            logger.warning("⚠️ All proxy auth methods failed")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Proxy auth dialog handling failed: {e}")
+            return False
+
     def check_connection_health(self) -> bool:
         """Проверить здоровье соединения с сайтом"""
         try:
@@ -587,10 +925,47 @@ class MultiTransferAutomation:
             # Открытие сайта с обработкой ошибок и автоматическим переключением прокси
             async def open_website():
                 logger.info(f"🌐 Opening website: {self.base_url}")
-                self._driver.get(self.base_url)
-                logger.info("✅ Website opened successfully")
-                self.take_screenshot_conditional("00_homepage.png")
-                return True
+                
+                # ИСПРАВЛЕНО: Более надежный переход на сайт
+                try:
+                    self._driver.get(self.base_url)
+                    await asyncio.sleep(2)  # Базовое время загрузки
+                    
+                    # Проверяем что действительно попали на сайт
+                    current_url = self._driver.current_url
+                    page_title = self._driver.title
+                    
+                    logger.info(f"📄 Current URL: {current_url}")
+                    logger.info(f"📄 Page title: '{page_title}'")
+                    
+                    if not current_url or "about:blank" in current_url or "chrome://" in current_url:
+                        logger.error("❌ Failed to navigate to website - still on blank page")
+                        return False
+                        
+                    if "multitransfer" not in current_url.lower():
+                        logger.warning(f"⚠️ Unexpected URL: {current_url}")
+                    
+                    logger.info("✅ Website opened successfully")
+                    
+                    # ИСПРАВЛЕНО: Увеличиваем задержку - прокси требует больше времени для JS
+                    if self.proxy:
+                        logger.info("⏳ PROXY MODE: Waiting for JavaScript and content to load...")
+                        await asyncio.sleep(10)  # Увеличено с 5 до 10 секунд для полной загрузки JS
+                        
+                        # Дополнительная проверка что контент действительно загрузился
+                        page_length = len(self._driver.page_source)
+                        logger.info(f"📄 PROXY MODE: Final page content length: {page_length} bytes")
+                        
+                        if page_length < 1000:
+                            logger.warning("⚠️ Page still looks empty, waiting more...")
+                            await asyncio.sleep(5)  # Еще 5 секунд если мало контента
+                    
+                    self.take_screenshot_conditional("00_homepage.png")
+                    return True
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error during website navigation: {e}")
+                    return False
             
             try:
                 await self.retry_on_connection_failure(open_website, max_retries=2, operation_name="opening website")
@@ -601,6 +976,7 @@ class MultiTransferAutomation:
                     logger.error("🔧 Try running again - sometimes undetected_chromedriver needs a retry.")
                 raise Exception(f"Failed to open website: {e}")
             
+            
             # ОПТИМИЗИРОВАННАЯ последовательность
             await self._fast_country_and_amount(payment_data)
             await self._fast_fill_forms(payment_data)
@@ -608,6 +984,9 @@ class MultiTransferAutomation:
             
             # ИСПРАВЛЕННЫЙ Step 12: Модальное окно "Проверка данных" с ВТОРОЙ КАПЧЕЙ
             await self._fast_handle_modal_with_second_captcha()
+            
+            # Step 13: ФИНАЛЬНАЯ кнопка "ПРОДОЛЖИТЬ" после обработки модального окна
+            await self._final_continue_button_click()
             
             # Извлечение результата
             result = await self._get_payment_result()
@@ -634,6 +1013,23 @@ class MultiTransferAutomation:
         """БЫСТРЫЕ шаги 1-6: страна и сумма с автоматическим переключением прокси (цель: 8-10 секунд)"""
         logger.info("🏃‍♂️ Fast steps 1-6: country and amount")
         
+        # ОТЛАДКА: Проверяем состояние страницы перед началом
+        try:
+            current_url = self._driver.current_url
+            page_source_length = len(self._driver.page_source)
+            buttons_count = len(self._driver.find_elements(By.TAG_NAME, "button"))
+            
+            logger.info(f"🔍 DEBUG: URL={current_url}")
+            logger.info(f"🔍 DEBUG: Page source length={page_source_length}")
+            logger.info(f"🔍 DEBUG: Buttons found={buttons_count}")
+            
+            if buttons_count == 0:
+                logger.error("❌ CRITICAL: No buttons found on page - content may not be loaded!")
+                self.take_screenshot_conditional("debug_no_buttons.png")
+                
+        except Exception as debug_error:
+            logger.error(f"❌ DEBUG error: {debug_error}")
+        
         # Выполняем шаги с автоматическим переключением прокси при ошибках соединения
         await self.retry_on_connection_failure(
             lambda: self._do_country_and_amount_steps(payment_data),
@@ -646,6 +1042,7 @@ class MultiTransferAutomation:
         # Шаг 1: Клик "ПЕРЕВЕСТИ ЗА РУБЕЖ" - БЕЗ ЗАДЕРЖЕК
         await asyncio.sleep(1)  # Минимальная загрузка страницы
         
+        
         buttons = self.find_elements_fast(By.TAG_NAME, "button")
         for btn in buttons:
             if "ПЕРЕВЕСТИ ЗА РУБЕЖ" in (btn.text or ""):
@@ -655,6 +1052,7 @@ class MultiTransferAutomation:
         
         # Шаг 2: Выбор Таджикистана - БЫСТРО
         await asyncio.sleep(0.5)  # Минимальное ожидание модального окна
+        
         
         for selector in self.selectors['tajikistan_select']:
             elements = self.find_elements_fast(By.XPATH, selector)
@@ -668,6 +1066,9 @@ class MultiTransferAutomation:
         
         # Шаг 3: Заполнение суммы - МГНОВЕННО
         await asyncio.sleep(0.5)
+        
+        # Проверка на модальное окно
+        await self.handle_verification_modal_if_present()
         
         for selector in self.selectors['amount_input']:
             element = self.find_element_fast(By.XPATH, selector, timeout=1)
@@ -851,15 +1252,32 @@ class MultiTransferAutomation:
         await asyncio.sleep(0.3)
         
         checkboxes = self.find_elements_fast(By.XPATH, "//input[@type='checkbox']")
+        checkbox_checked = False
         for cb in checkboxes:
             try:
                 # Принудительный клик через JavaScript
                 self._driver.execute_script("arguments[0].click();", cb)
                 if cb.is_selected():
                     logger.info("✅ Step 9: Agreement checkbox checked")
+                    checkbox_checked = True
                     break
             except:
                 continue
+        
+        # БЫСТРАЯ ПРОВЕРКА: После клика по чекбоксу согласия может появиться модальное окно "Проверка данных"
+        if checkbox_checked:
+            logger.info("🚨 FAST CHECK: Quick modal check after checkbox (2s max)")
+            await asyncio.sleep(0.5)  # Минимальная задержка
+            
+            # Быстрая проверка только 2 секунды вместо 10
+            for attempt in range(2):
+                modal_detected = await self.handle_verification_modal_if_present()
+                if modal_detected:
+                    logger.info("✅ HANDLED: Modal found and processed quickly")
+                    break
+                await asyncio.sleep(1)  # Проверяем 2 раза по 1 секунде
+            
+            logger.info("✅ FAST CHECK: Modal check completed (2s total)")
         
         self.take_screenshot_conditional("fast_forms_filled.png")
         logger.info("🏃‍♂️ Forms filled FAST!")
@@ -880,13 +1298,29 @@ class MultiTransferAutomation:
         
         # Шаг 10: Финальная отправка
         buttons = self.find_elements_fast(By.TAG_NAME, "button")
+        form_submitted = False
         for btn in buttons:
             if "ПРОДОЛЖИТЬ" in (btn.text or "").upper():
                 if self.click_element_fast(btn):
                     logger.info("✅ Step 10: Final form submitted")
+                    form_submitted = True
                     break
         
         await asyncio.sleep(1)  # Ожидание обработки
+        
+        # КРИТИЧЕСКАЯ ПРОВЕРКА: После отправки формы может появиться модальное окно "Проверка данных"
+        if form_submitted:
+            logger.info("🚨 MONITORING: Checking for 'Проверка данных' modal after form submit")
+            
+            # Быстрая проверка 2 секунды после отправки
+            for attempt in range(2):
+                modal_detected = await self.handle_verification_modal_if_present()
+                if modal_detected:
+                    logger.info("✅ HANDLED: Modal processed after form submit")
+                    break
+                await asyncio.sleep(1)
+            
+            logger.info("✅ MONITORING: Modal check completed after form submit")
         
         # Шаг 11: КРИТИЧЕСКОЕ решение ПЕРВОЙ капчи
         logger.info("🔐 Step 11: CRITICAL FIRST CAPTCHA solving")
@@ -894,6 +1328,20 @@ class MultiTransferAutomation:
         
         if captcha_solved:
             logger.info("✅ Step 11: FIRST CAPTCHA solved successfully")
+            
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: После решения первой капчи может появиться модальное окно "Проверка данных"
+            logger.info("🚨 MONITORING: Checking for 'Проверка данных' modal after FIRST captcha")
+            
+            # Быстрая проверка 2 секунды после решения капчи
+            for attempt in range(2):
+                modal_detected = await self.handle_verification_modal_if_present()
+                if modal_detected:
+                    logger.info("✅ HANDLED: Modal processed after FIRST captcha")
+                    break
+                await asyncio.sleep(1)
+            
+            logger.info("✅ MONITORING: Modal check completed after FIRST captcha")
+            
         else:
             logger.error("❌ Step 11: FIRST CAPTCHA solve FAILED - cannot proceed")
             # КРИТИЧЕСКОЕ: если капча не решена - СТОП
@@ -903,13 +1351,12 @@ class MultiTransferAutomation:
     
     async def _fast_handle_modal_with_second_captcha(self):
         """
-        ДИАГНОСТИЧЕСКАЯ версия: обработка модального окна с полной диагностикой
+        БЫСТРАЯ обработка модального окна с 10-секундным таймаутом
         """
-        logger.info("🏃‍♂️ Step 12: DIAGNOSTIC modal + SECOND CAPTCHA handling")
+        logger.info("🏃‍♂️ Step 12: FAST modal + SECOND CAPTCHA handling (10s timeout)")
+        step12_start = time.time()
         
-        await asyncio.sleep(2)  # Больше времени для появления модального окна
-        
-        # СТРОГИЙ поиск модального окна "Проверка данных"
+        # БЫСТРЫЙ поиск модального окна "Проверка данных" с 10-секундным лимитом
         modal_selectors = [
             "//div[contains(text(), 'Проверка данных')]",
             "//*[contains(text(), 'Проверьте данные получателя')]",
@@ -920,20 +1367,31 @@ class MultiTransferAutomation:
         
         modal_found = False
         modal_element = None
-        for selector in modal_selectors:
-            element = self.find_element_fast(By.XPATH, selector, timeout=3)
-            if element and element.is_displayed():
-                logger.info(f"✅ Found 'Проверка данных' modal with selector: {selector}")
-                modal_found = True
-                modal_element = element
+        
+        # Ищем модальное окно в течение МАКСИМУМ 3 секунд (ускорено)
+        start_time = time.time()
+        timeout_seconds = 3
+        
+        while (time.time() - start_time) < timeout_seconds:
+            for selector in modal_selectors:
+                element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                if element and element.is_displayed():
+                    logger.info(f"✅ Found 'Проверка данных' modal with selector: {selector} after {time.time() - start_time:.1f}s")
+                    modal_found = True
+                    modal_element = element
+                    break
+            
+            if modal_found:
                 break
+                
+            await asyncio.sleep(0.5)  # Короткая пауза между проверками
         
         if not modal_found:
-            logger.warning("⚠️ No 'Проверка данных' modal found - checking for form return scenario")
+            elapsed = time.time() - step12_start
+            logger.warning(f"⚠️ No 'Проверка данных' modal found after {elapsed:.1f}s - proceeding to Step 13")
             # Делаем скриншот для диагностики текущего состояния
-            self.take_screenshot_conditional("no_modal_found_diagnostic.png")
-            # Если нет модального окна, возможно сайт вернул к форме - ищем синюю кнопку "Продолжить"
-            await self._handle_form_return_scenario()
+            self.take_screenshot_conditional("no_modal_found_proceeding_step13.png")
+            logger.info(f"✅ Step 12 completed in {elapsed:.1f}s (no modal)")
             return
         
         self.take_screenshot_conditional("step12_modal_found.png")
@@ -959,7 +1417,8 @@ class MultiTransferAutomation:
             self.take_screenshot_conditional("step12_modal_failure.png")
             raise Exception("DIAGNOSTIC: Failed to handle modal - payment cannot be completed")
         
-        logger.info("🏃‍♂️ Step 12 DIAGNOSTIC completion - proceeding to result extraction")
+        elapsed = time.time() - step12_start
+        logger.info(f"✅ Step 12 completed in {elapsed:.1f}s (modal found and processed)")
     
     async def _handle_form_return_scenario(self):
         """
@@ -1698,6 +2157,198 @@ class MultiTransferAutomation:
         except Exception as e:
             logger.error(f"❌ DIAGNOSTIC button click error: {e}")
             return False
+
+    async def _final_continue_button_click(self):
+        """Step 13: БЫСТРЫЙ клик по кнопке ПРОДОЛЖИТЬ без лишних задержек"""
+        logger.info("⚡ Step 13: FAST 'ПРОДОЛЖИТЬ' button click - NO delays!")
+        
+        # УБИРАЕМ скриншот для скорости (только в debug режиме)
+        # self.take_screenshot_conditional("13_final_page_before_continue.png")
+        
+        # УБИРАЕМ проверку URL - не нужна для клика
+        # current_url = self._driver.current_url
+        # logger.info(f"📍 Current URL before final continue: {current_url}")
+        
+        # УБИРАЕМ задержку 2 секунды - сразу ищем кнопку!
+        # await asyncio.sleep(2)
+        
+        # ⚡ БЫСТРЫЙ Метод 1: JavaScript поиск и клик за один вызов (самый быстрый!)
+        logger.info("⚡ Trying FASTEST method: JavaScript instant search and click")
+        
+        fast_js_script = """
+        // УЛУЧШЕННЫЙ поиск кнопки ПРОДОЛЖИТЬ с отладкой
+        var keywords = ['ПРОДОЛЖИТЬ', 'Продолжить', 'продолжить', 'CONTINUE', 'Continue'];
+        var buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"], div[role="button"]');
+        
+        console.log('FAST: Total buttons found:', buttons.length);
+        
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var text = (btn.textContent || btn.value || btn.innerText || '').trim();
+            
+            // Логируем все кнопки для отладки
+            if (text) {
+                console.log('FAST: Button', i, 'text:', text, 'visible:', btn.offsetParent !== null, 'enabled:', !btn.disabled);
+            }
+            
+            // Проверяем видимость и активность
+            if (btn.offsetParent !== null && !btn.disabled) {
+                // Точное совпадение с ключевыми словами
+                for (var j = 0; j < keywords.length; j++) {
+                    if (text === keywords[j] || text.includes(keywords[j])) {
+                        console.log('FAST: FOUND TARGET! Clicking button:', text);
+                        btn.scrollIntoView({block: 'center', behavior: 'smooth'});
+                        setTimeout(function() { btn.click(); }, 100);
+                        return {success: true, method: 'js_instant', text: text};
+                    }
+                }
+            }
+        }
+        return {success: false};
+        """
+        
+        try:
+            result = self._driver.execute_script(fast_js_script)
+            if result.get('success'):
+                logger.info(f"✅ FASTEST SUCCESS: Clicked button '{result.get('text')}' via {result.get('method')}")
+                # Минимальная задержка для обработки клика
+                await asyncio.sleep(1)
+                logger.info("✅ Step 13 completed INSTANTLY!")
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ Fast JS method failed: {e}")
+        
+        # ⚡ БЫСТРЫЙ Метод 2: Только самые вероятные селекторы (если JS не сработал)
+        logger.info("⚡ Trying FAST method: Priority selectors only")
+        
+        fast_selectors = [
+            "//button[contains(text(), 'ПРОДОЛЖИТЬ')]",  # Самый вероятный
+            "//button[text()='ПРОДОЛЖИТЬ']",  # Точное совпадение
+            "//button[contains(text(), 'Продолжить')]",  # Второй по вероятности
+            "//input[@type='submit' and contains(@value, 'ПРОДОЛЖИТЬ')]",  # Submit кнопки
+            "//button[contains(@class, 'btn') and contains(text(), 'ПРОДОЛЖИТЬ')]",  # С CSS классом
+            "//*[@type='button' and contains(text(), 'ПРОДОЛЖИТЬ')]",  # Любой элемент типа button
+            "//div[contains(@class, 'button') and contains(text(), 'ПРОДОЛЖИТЬ')]",  # Div-кнопки
+        ]
+        
+        button_found = False
+        
+        # Быстрый поиск только по приоритетным селекторам
+        for i, selector in enumerate(fast_selectors):
+            try:
+                element = self._driver.find_element(By.XPATH, selector)
+                if element and element.is_displayed() and element.is_enabled():
+                    logger.info(f"✅ FAST: Found button with selector #{i}")
+                    
+                    # Быстрый клик без задержек
+                    try:
+                        element.click()
+                        logger.info(f"✅ FAST: Clicked via normal click")
+                        button_found = True
+                        break
+                    except:
+                        # JavaScript клик если обычный не сработал
+                        self._driver.execute_script("arguments[0].click();", element)
+                        logger.info(f"✅ FAST: Clicked via JavaScript")
+                        button_found = True
+                        break
+                        
+            except Exception as e:
+                logger.debug(f"Selector #{i} failed: {e}")
+                continue
+        
+        # ⚡ БЫСТРЫЙ Fallback: Только один дополнительный поиск если основные методы не сработали
+        if not button_found:
+            logger.info("⚡ FAST: Trying enhanced fallback search")
+            
+            # Расширенный JavaScript поиск с диагностикой
+            enhanced_search = """
+            // Ищем все возможные кнопки и логируем их для диагностики
+            var allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"]');
+            var foundButtons = [];
+            
+            console.log('FAST: Total buttons found:', allButtons.length);
+            
+            for (var i = 0; i < allButtons.length; i++) {
+                var btn = allButtons[i];
+                var text = btn.textContent || btn.value || btn.innerText || '';
+                var visible = btn.offsetParent !== null && !btn.disabled;
+                
+                // Добавляем в диагностику все видимые кнопки
+                if (visible && text.trim()) {
+                    foundButtons.push({
+                        index: i,
+                        text: text.trim(),
+                        tagName: btn.tagName,
+                        className: btn.className || ''
+                    });
+                }
+                
+                // Ищем кнопки продолжить (разные варианты)
+                var continueKeywords = [
+                    'ПРОДОЛЖИТЬ', 'Продолжить', 'продолжить',
+                    'CONTINUE', 'Continue', 'continue',
+                    'ДАЛЕЕ', 'Далее', 'далее',
+                    'NEXT', 'Next', 'next',
+                    'ОТПРАВИТЬ', 'Отправить'
+                ];
+                
+                if (visible) {
+                    for (var j = 0; j < continueKeywords.length; j++) {
+                        if (text.includes(continueKeywords[j])) {
+                            console.log('FAST: Found and clicking button:', text);
+                            btn.scrollIntoView({block: 'center', behavior: 'instant'});
+                            btn.click();
+                            return {
+                                success: true, 
+                                text: text.trim(),
+                                method: 'enhanced_fallback',
+                                totalButtons: allButtons.length,
+                                foundButtons: foundButtons.length
+                            };
+                        }
+                    }
+                }
+            }
+            
+            return {
+                success: false,
+                totalButtons: allButtons.length,
+                foundButtons: foundButtons,
+                message: 'No continue button found'
+            };
+            """
+            
+            try:
+                result = self._driver.execute_script(enhanced_search)
+                if result.get('success'):
+                    logger.info(f"✅ FAST: Enhanced fallback found button '{result.get('text')}'")
+                    logger.info(f"📊 FAST: Scanned {result.get('totalButtons')} buttons, {result.get('foundButtons')} visible")
+                    button_found = True
+                else:
+                    logger.error(f"❌ FAST: No continue button found in {result.get('totalButtons')} buttons")
+                    
+                    # Диагностика - показываем найденные кнопки
+                    found_buttons = result.get('foundButtons', [])[:5]  # Первые 5
+                    logger.error("🔍 FAST: Available buttons:")
+                    for btn_info in found_buttons:
+                        logger.error(f"  - '{btn_info.get('text', '')[:30]}' ({btn_info.get('tagName')})")
+                        
+            except Exception as e:
+                logger.error(f"❌ FAST: Enhanced fallback failed: {e}")
+        
+        # ⚡ БЫСТРОЕ завершение
+        if button_found:
+            logger.info("✅ FAST: Step 13 completed successfully!")
+            # Минимальная задержка для обработки клика
+            await asyncio.sleep(1)
+        else:
+            logger.error("❌ FAST: Could not find ПРОДОЛЖИТЬ button with any method")
+            # Делаем скриншот только при ошибке
+            self.take_screenshot_conditional("13_fast_button_not_found.png")
+            raise Exception("FAST: Final ПРОДОЛЖИТЬ button not found after all search methods")
+        
+        logger.info("⚡ FAST: Step 13 completed in minimal time!")
 
     async def _check_modal_disappeared(self) -> bool:
         """Проверка исчезновения модального окна"""
