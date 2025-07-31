@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from .providers import Proxy6Provider
 from .validator import proxy_validator
+from .ssh_tunnel import SSHTunnelManager, ProxyCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ class ProxyManager:
         self.failed_proxies = set()
         self.last_fetch_time = None
         self.multi_provider_manager = None
+        
+        # SSH туннель для обхода Chrome диалогов
+        self.ssh_tunnel_manager = SSHTunnelManager()
+        self.tunnel_enabled = config.get('proxy', {}).get('use_ssh_tunnel', True) if config else True
         
         # Проверяем временное отключение прокси
         proxy_disabled_file = "/tmp/proxy_disabled"
@@ -76,12 +81,52 @@ class ProxyManager:
             logger.debug("🌐 Using direct connection (proxy disabled)")
             return None
         
-        # Используем Proxy6 провайдер
+        # Используем Proxy6 провайдер с SSH туннелем
         if hasattr(self, 'proxy6_provider'):
             try:
                 proxies = await self.proxy6_provider.get_proxies()
                 if proxies:
                     proxy_info = proxies[0]  # Берем первый (и единственный) прокси
+                    
+                    # Создаем SSH туннель для обхода Chrome диалогов
+                    if self.tunnel_enabled:
+                        logger.info("🔧 Creating SSH tunnel to bypass Chrome auth dialogs...")
+                        try:
+                            proxy_creds = ProxyCredentials(
+                                host=proxy_info.ip,
+                                port=int(proxy_info.port),
+                                username=proxy_info.user,
+                                password=proxy_info.password,
+                                proxy_type=proxy_info.type
+                            )
+                            
+                            tunnel_host, tunnel_port = await self.ssh_tunnel_manager.create_tunnel(proxy_creds)
+                            
+                            # Возвращаем локальный туннель без авторизации
+                            tunnel_dict = {
+                                'ip': tunnel_host,
+                                'port': str(tunnel_port),
+                                'user': '',  # Без авторизации!
+                                'pass': '',  # Без авторизации!
+                                'type': 'http',  # Локальный HTTP прокси
+                                'country': proxy_info.country,
+                                'provider': 'ssh_tunnel',
+                                'original_proxy': {
+                                    'ip': proxy_info.ip,
+                                    'port': proxy_info.port,
+                                    'user': proxy_info.user,
+                                    'type': proxy_info.type
+                                }
+                            }
+                            
+                            logger.info(f"✅ SSH tunnel created: {tunnel_host}:{tunnel_port} -> {proxy_info.ip}:{proxy_info.port}")
+                            return tunnel_dict
+                            
+                        except Exception as tunnel_error:
+                            logger.warning(f"⚠️ SSH tunnel failed: {tunnel_error}, falling back to direct proxy")
+                            # Fallback к прямому прокси
+                    
+                    # Fallback: обычный прокси (может потребовать диалог)
                     proxy_dict = {
                         'ip': proxy_info.ip,
                         'port': proxy_info.port,
@@ -92,18 +137,8 @@ class ProxyManager:
                         'provider': 'proxy6'
                     }
                     
-                    # Проверяем работоспособность прокси перед возвратом
-                    logger.debug(f"🔍 Validating Proxy6 proxy: {proxy_dict['ip']}:{proxy_dict['port']}")
-                    is_valid, response_time, error = await proxy_validator.validate_proxy(proxy_dict)
-                    
-                    if is_valid:
-                        logger.debug(f"✅ Proxy6 proxy validated: {proxy_dict['ip']}:{proxy_dict['port']} ({response_time:.2f}s)")
-                        return proxy_dict
-                    else:
-                        logger.warning(f"⚠️ Proxy6 proxy validation failed: {proxy_dict['ip']}:{proxy_dict['port']} - {error}")
-                        # Отмечаем как проблемный
-                        await self.mark_proxy_failed(proxy_dict['ip'], proxy_dict['port'], f"Validation failed: {error}")
-                        return None
+                    logger.warning("⚠️ Using direct proxy (may show Chrome auth dialog)")
+                    return proxy_dict
                 else:
                     logger.warning("⚠️ No Proxy6 proxies available")
                     return None
@@ -249,6 +284,10 @@ class ProxyManager:
         """Async context manager exit"""
         if self.enabled:
             logger.info("🔒 ProxyManager shutdown")
+        
+        # Останавливаем SSH туннели
+        if hasattr(self, 'ssh_tunnel_manager'):
+            await self.ssh_tunnel_manager.stop_tunnel()
     
     def _need_refresh(self) -> bool:
         """Проверить, нужно ли обновить список прокси"""

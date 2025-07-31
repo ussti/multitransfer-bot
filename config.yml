@@ -36,6 +36,10 @@ proxy:
   check_interval: 300
   reset_to_primary_interval: 600  # Reset to primary every 10 minutes
   
+  # SSH tunnel для обхода Chrome диалогов авторизации
+  use_ssh_tunnel: false  # ИСПОЛЬЗУЕМ Chrome Extension (стабильнее)
+  tunnel_timeout: 30    # Таймаут создания туннеля в секундах
+  
 # API-only captcha configuration (без плагина)
 captcha:
   provider: "${CAPTCHA_PROVIDER}"

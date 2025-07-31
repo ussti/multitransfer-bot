@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from web.browser.manager import BrowserManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from core.proxy.manager import ProxyManager
+from core.config import Config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,11 +59,18 @@ async def test_complete_flow():
     """Полный тест автоматизации"""
     logger.info("🔍 Testing COMPLETE automation flow...")
     
-    config = get_test_config()
-    browser_manager = BrowserManager(config, proxy_manager=None)
+    # Загружаем основную конфигурацию с прокси
+    config_obj = Config()
+    test_config = get_test_config()
+    
+    # Создаем прокси менеджер с SSH туннелем
+    proxy_manager = ProxyManager(config_obj.data)
+    
+    browser_manager = BrowserManager(test_config, proxy_manager=proxy_manager)
     
     async with browser_manager:
-        success = await browser_manager.start_browser(use_proxy=False)
+        # Включаем прокси для тестирования SSH туннеля!
+        success = await browser_manager.start_browser(use_proxy=True)
         if not success:
             return False
         
@@ -201,8 +210,8 @@ async def test_complete_flow():
         await asyncio.sleep(3)
         await browser_manager.take_screenshot("step4_currency_selected.png")
         
-        # Шаг 5: Выбор способа перевода "Корти Милли"
-        logger.info("📍 Step 5: Select 'Корти Милли' transfer method")
+        # Шаг 5: Выбор способа перевода "Все карты"
+        logger.info("📍 Step 5: Select 'Все карты' transfer method")
         
         # Сначала ищем dropdown или кнопку для выбора способа перевода
         transfer_method_selectors = [
@@ -241,47 +250,47 @@ async def test_complete_flow():
         await asyncio.sleep(3)
         await browser_manager.take_screenshot("step5_transfer_method_dropdown.png")
         
-        # Теперь ищем "Корти Милли" в открывшемся списке
-        korti_milli_selectors = [
-            "//*[contains(text(), 'Корти Милли')]",
-            "//div[contains(text(), 'Корти Милли')]",
-            "//span[contains(text(), 'Корти Милли')]",
-            "//li[contains(text(), 'Корти Милли')]",
-            "//*[contains(@class, 'option') and contains(text(), 'Корти Милли')]"
+        # Теперь ищем "Все карты" в открывшемся списке
+        vse_karty_selectors = [
+            "//*[contains(text(), 'Все карты')]",
+            "//div[contains(text(), 'Все карты')]",
+            "//span[contains(text(), 'Все карты')]",
+            "//li[contains(text(), 'Все карты')]",
+            "//*[contains(@class, 'option') and contains(text(), 'Все карты')]"
         ]
         
-        korti_milli_selected = False
-        for selector in korti_milli_selectors:
+        vse_karty_selected = False
+        for selector in vse_karty_selectors:
             elements = await browser_manager.find_elements_safe(By.XPATH, selector)
-            logger.info(f"Found {len(elements)} Korti Milli elements with selector: {selector}")
+            logger.info(f"Found {len(elements)} Все карты elements with selector: {selector}")
             
             for element in elements:
                 try:
                     if element.is_displayed():
-                        logger.info("🎯 Clicking Корти Милли option")
+                        logger.info("🎯 Clicking Все карты option")
                         await asyncio.sleep(random.uniform(0.3, 0.7))
                         
                         browser_manager.driver.execute_script("arguments[0].scrollIntoView(true);", element)
                         await asyncio.sleep(0.3)
                         
                         if await browser_manager.click_element_safe(element):
-                            logger.info("✅ Successfully selected Корти Милли")
-                            korti_milli_selected = True
+                            logger.info("✅ Successfully selected Все карты")
+                            vse_karty_selected = True
                             break
                         else:
                             browser_manager.driver.execute_script("arguments[0].click();", element)
-                            logger.info("✅ Successfully selected Корти Милли via JavaScript")
-                            korti_milli_selected = True
+                            logger.info("✅ Successfully selected Все карты via JavaScript")
+                            vse_karty_selected = True
                             break
                 except Exception as e:
                     logger.debug(f"Korti Milli element click failed: {e}")
                     continue
             
-            if korti_milli_selected:
+            if vse_karty_selected:
                 break
         
-        if not korti_milli_selected:
-            logger.warning("⚠️ Could not select Корти Милли, continuing...")
+        if not vse_karty_selected:
+            logger.warning("⚠️ Could not select Все карты, continuing...")
         
         await asyncio.sleep(3)
         await browser_manager.take_screenshot("step5_method_selected.png")
@@ -329,7 +338,7 @@ async def main():
         logger.info("   ✅ 2. Selected Tajikistan")
         logger.info("   ✅ 3. Filled amount (1000 RUB)")
         logger.info("   ✅ 4. Selected TJS currency")
-        logger.info("   ✅ 5. Selected Корти Милли method")
+        logger.info("   ✅ 5. Selected Все карты method")
         logger.info("   ✅ 6. Clicked continue")
         logger.info("   🎯 Ready for Telegram bot integration!")
     else:

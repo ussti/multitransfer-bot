@@ -19,6 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
 from web.captcha.solver import CaptchaSolver
+from .system_proxy_helper import system_proxy_manager
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,20 @@ class MultiTransferAutomation:
         try:
             logger.info("🚀 Fast Chrome driver setup...")
             
+            # РАБОЧИЙ ПОДХОД: Chrome Extension для обхода диалогов
+            extension_path = None
+            if self.proxy and self.proxy.get('user') and self.proxy.get('pass'):
+                logger.info("🔧 Creating Chrome Extension for proxy auth...")
+                try:
+                    extension_path = self._create_proxy_auth_extension(
+                        self.proxy['user'], 
+                        self.proxy['pass']
+                    )
+                    logger.info("✅ Proxy auth extension created")
+                except Exception as e:
+                    logger.error(f"❌ Failed to create proxy extension: {e}")
+                    self.proxy = None
+            
             options = uc.ChromeOptions()
             
             # DEBUG MODE START - Проверяем режим отладки
@@ -153,7 +168,7 @@ class MultiTransferAutomation:
                 options.add_argument('--no-sandbox')
                 options.add_argument('--disable-dev-shm-usage') 
                 options.add_argument('--disable-blink-features=AutomationControlled')
-                options.add_argument('--disable-web-security')
+                # НЕ добавляем --disable-web-security здесь - будет добавлен в PROXY режиме
                 # Включаем все для лучшей отладки - изображения, JS, расширения
                 logger.info("🎨 DEBUG: Enabling images, JavaScript and extensions for better debugging")
             else:
@@ -181,84 +196,32 @@ class MultiTransferAutomation:
                 options.add_argument('--window-size=1920,1080')
             # DEBUG MODE END
             
-            # ИСПРАВЛЕНО: Упрощенная прокси авторизация через встроенные возможности Chrome
+            # ТОЧНАЯ КОПИЯ ЛОГИКИ ИЗ BrowserManager
             if self.proxy:
-                proxy_string = f"{self.proxy['ip']}:{self.proxy['port']}"
-                logger.info(f"🔐 Setting up proxy: {proxy_string}")
+                proxy_type = self.proxy.get('type', 'http')
                 
-                # Добавляем прокси сервер с встроенной авторизацией
-                proxy_type = self.proxy.get('type', 'http').lower()
-                
-                if self.proxy.get('user') and self.proxy.get('pass'):
-                    # SOCKS5 ПОДХОД: Используем SOCKS5 прокси для лучшей совместимости
-                    if proxy_type == 'socks5':
-                        logger.info("🔧 Using SOCKS5 proxy with improved Chrome args...")
-                        # Возвращаемся к Chrome аргументам, но с улучшениями
-                        proxy_url_with_auth = f"socks5://{self.proxy['user']}:{self.proxy['pass']}@{proxy_string}"
-                        options.add_argument(f'--proxy-server={proxy_url_with_auth}')
-                        
-                        # Добавляем флаги для решения ERR_NO_SUPPORTED_PROXIES
-                        options.add_argument('--proxy-bypass-list=<-loopback>')
-                        options.add_argument('--disable-proxy-certificate-handler')
-                        options.add_argument('--disable-extensions-http-throttling')
-                        
-                        logger.info(f"✅ SOCKS5 proxy configured: socks5://***:***@{proxy_string}")
-                    else:
-                        # HTTP fallback
-                        logger.info("🔧 Using HTTP proxy with built-in authentication...")
-                        options.add_argument(f'--proxy-server={proxy_type}://{proxy_string}')
-                        options.add_argument(f'--proxy-auth=auto')
-                        options.add_argument(f'--auth-server-whitelist=*')
-                        options.add_argument(f'--auth-negotiate-delegate-whitelist=*')
-                    
-                    # Сохраняем credentials для использования в обработчике
-                    self._proxy_user = self.proxy['user']
-                    self._proxy_pass = self.proxy['pass']
-                    
-                    logger.info(f"✅ Built-in proxy auth configured for: {proxy_string}")
+                # Настройка прокси сервера (как в BrowserManager)
+                if proxy_type == 'http':
+                    options.add_argument(f"--proxy-server=http://{self.proxy['ip']}:{self.proxy['port']}")
                 else:
-                    # Без авторизации
-                    if proxy_type == 'socks5':
-                        options.add_argument(f'--proxy-server=socks5://{proxy_string}')
-                        logger.info(f"🌐 Using unauthenticated SOCKS5 proxy: {proxy_string}")
-                    else:
-                        options.add_argument(f'--proxy-server=http://{proxy_string}')
-                        logger.warning(f"⚠️ No proxy credentials - using unauthenticated HTTP proxy")
+                    options.add_argument(f"--proxy-server=socks5://{self.proxy['ip']}:{self.proxy['port']}")
+                
+                # Добавляем extension для аутентификации (как в BrowserManager)
+                if extension_path:
+                    options.add_argument(f"--load-extension={extension_path}")
+                    logger.info(f"✅ Proxy auth extension loaded: {extension_path}")
                     
-                logger.info(f"🌐 Using {proxy_type} proxy: {proxy_string}")
+                logger.info(f"🔧 Using {proxy_type.upper()} proxy: {self.proxy['ip']}:{self.proxy['port']} (with extension auth)")
+                
+                if self.proxy.get('provider') == 'ssh_tunnel':
+                    logger.info("✅ SSH tunnel proxy configured - no Chrome auth dialogs expected")
+                else:
+                    logger.info("✅ Chrome Extension proxy configured - no Chrome auth dialogs expected")
             
             # Быстрый user agent
             options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36')
             
-            # Дополнительные флаги для стабильности с прокси (рекомендации Proxy6)
-            if self.proxy:
-                logger.info("🔧 Applying Proxy6 stability recommendations")
-                options.add_argument('--disable-features=VizDisplayCompositor')
-                options.add_argument('--disable-ipc-flooding-protection')
-                options.add_argument('--disable-renderer-backgrounding')
-                options.add_argument('--disable-backgrounding-occluded-windows')
-                options.add_argument('--disable-background-networking')
-                # Дополнительные флаги для стабильности соединения
-                options.add_argument('--disable-background-timer-throttling')
-                options.add_argument('--disable-renderer-backgrounding')
-                options.add_argument('--disable-backgrounding-occluded-windows')
-                options.add_argument('--disable-client-side-phishing-detection')
-                options.add_argument('--disable-component-update')
-                options.add_argument('--disable-default-apps')
-                options.add_argument('--disable-domain-reliability')
-                options.add_argument('--disable-features=TranslateUI')
-                options.add_argument('--disable-hang-monitor')
-                options.add_argument('--disable-popup-blocking')
-                options.add_argument('--disable-prompt-on-repost')
-                options.add_argument('--disable-sync')
-                # ИСПРАВЛЕНО: НЕ используем headless с прокси - может блокировать JavaScript
-                # if not visual_debug:
-                #     options.add_argument('--headless=new')
-                #     logger.info("🔧 Using new headless mode for proxy stability")
-                logger.info("🔧 PROXY MODE: Using visual mode for JavaScript compatibility")
-                # Увеличиваем таймауты для DNS и соединения
-                options.add_argument('--aggressive-cache-discard')
-                options.add_argument('--max_old_space_size=4096')
+            # УБРАНЫ ВСЕ ЛИШНИЕ ФЛАГИ - используем только базовые как в BrowserManager
             
             # Создаем драйвер с улучшенными настройками
             logger.info("🚀 Creating Chrome driver with Proxy6 optimizations")
@@ -300,12 +263,13 @@ class MultiTransferAutomation:
                     logger.info(f"🔍 PROXY TEST: Content length={page_length}")
                     
                     if page_length < 1000:
-                        # Для SOCKS5 диалог не нужен - авторизация через URL
-                        if self.proxy.get('type', 'http').lower() == 'socks5':
-                            logger.warning("⚠️ SOCKS5 auth failed - proxy may be blocked or invalid")
+                        # Для современных прокси (SOCKS5 и HTTP с URL-авторизацией) диалог не нужен
+                        if self.proxy.get('type', 'http').lower() in ['socks5', 'http']:
+                            logger.warning("⚠️ Proxy auth failed - proxy may be blocked or invalid")
+                            logger.warning(f"⚠️ Proxy type: {self.proxy.get('type', 'unknown')}, IP: {self.proxy.get('ip', 'unknown')}")
                         else:
-                            # Только для HTTP пробуем диалог
-                            logger.warning("⚠️ HTTP auth may have failed - checking for dialog...")
+                            # Только для других типов пробуем диалог
+                            logger.warning("⚠️ Unknown proxy type - checking for dialog...")
                             await self._handle_proxy_auth_dialog()
                             await asyncio.sleep(3)
                             
@@ -476,8 +440,9 @@ class MultiTransferAutomation:
         try:
             logger.info(f"🔧 Creating proxy auth extension for user: {username}")
             
-            # Создаем временную папку для extension
-            extension_dir = tempfile.mkdtemp(prefix="proxy_auth_")
+            # Создаем постоянную папку для extension (рабочая версия из BrowserManager)
+            extension_dir = os.path.join(os.getcwd(), 'proxy_auth_extension')
+            os.makedirs(extension_dir, exist_ok=True)
             
             # Manifest файл для Chrome extension
             manifest = {
@@ -553,14 +518,9 @@ console.log('Proxy6 Auth Extension: Ready');
                 f.write(background_js)
             
             # Создаем .crx архив
-            extension_path = os.path.join(extension_dir, "proxy_auth.crx")
-            
-            with zipfile.ZipFile(extension_path, 'w') as zf:
-                zf.write(os.path.join(extension_dir, "manifest.json"), "manifest.json")
-                zf.write(os.path.join(extension_dir, "background.js"), "background.js")
-            
-            logger.info(f"✅ Proxy auth extension created: {extension_path}")
-            return extension_path
+            # НЕ создаем .crx файл, возвращаем путь к папке (как в BrowserManager)
+            logger.info(f"✅ Proxy auth extension created: {extension_dir}")
+            return extension_dir
             
         except Exception as e:
             logger.error(f"❌ Failed to create proxy auth extension: {e}")
@@ -787,13 +747,16 @@ console.log('Proxy6 Auth Extension: Ready');
                     logger.warning("⚠️ Still same proxy - trying direct connection")
                     return await self._try_direct_connection(operation_func, operation_name)
             
-            # Закрываем текущий браузер
+            # Закрываем текущий браузер и восстанавливаем системные настройки прокси
             if self._driver:
                 try:
                     self._driver.quit()
                 except:
                     pass
                 self._driver = None
+            
+            # Восстанавливаем системные настройки прокси
+            await system_proxy_manager.restore_settings()
             
             # Обновляем прокси и запускаем новый браузер
             self.proxy = new_proxy
@@ -2373,3 +2336,36 @@ console.log('Proxy6 Auth Extension: Ready');
         except Exception as e:
             logger.debug(f"Modal check error: {e}")
             return False
+    
+    async def cleanup(self):
+        """Очистка ресурсов и восстановление системных настроек"""
+        try:
+            logger.info("🧹 Cleaning up MultiTransfer automation...")
+            
+            # Закрываем браузер
+            if hasattr(self, '_driver') and self._driver:
+                try:
+                    self._driver.quit()
+                except:
+                    pass
+                self._driver = None
+            
+            # Восстанавливаем системные настройки прокси
+            await system_proxy_manager.restore_settings()
+            
+            # Останавливаем SSH туннели если используем proxy_manager
+            if hasattr(self, 'proxy_manager') and self.proxy_manager:
+                await self.proxy_manager.ssh_tunnel_manager.stop_tunnel()
+            
+            logger.info("✅ Cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"❌ Error during cleanup: {e}")
+    
+    def __del__(self):
+        """Деструктор для автоматической очистки"""
+        try:
+            if hasattr(self, '_driver') and self._driver:
+                self._driver.quit()
+        except:
+            pass

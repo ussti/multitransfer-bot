@@ -5,7 +5,6 @@ Payment processing service
 
 import logging
 import asyncio
-import os
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -22,15 +21,13 @@ logger = logging.getLogger(__name__)
 class PaymentService:
     """Сервис для обработки платежей"""
     
-    def __init__(self, session, proxy_manager=None, browser_manager_factory=None):
+    def __init__(self, session, proxy_manager=None):
         self.session = session
         self.user_repo = UserRepository(session)
         self.payment_repo = PaymentHistoryRepository(session)
         self.passport_repo = PassportDataRepository(session)
         self.config = get_config()
         self.proxy_manager = proxy_manager or ProxyManager(config=self.config.to_dict())
-        # НОВЫЙ ПАРАМЕТР: фабрика для создания BrowserManager
-        self.browser_manager_factory = browser_manager_factory
         
     async def create_payment(
         self, 
@@ -53,26 +50,6 @@ class PaymentService:
         """
         logger.info(f"🔄 Creating payment for user {user_id}: {amount} {currency_from} -> {currency_to}")
         
-        # НОВАЯ ЛОГИКА: Проверка флага для выбора метода
-        use_browser_manager = os.getenv('USE_BROWSER_MANAGER', 'false').lower() == 'true'
-        
-        if use_browser_manager and self.browser_manager_factory:
-            logger.info("🚀 Using NEW BrowserManager approach")
-            return await self._create_payment_with_browser_manager(user_id, amount, currency_from, currency_to)
-        else:
-            logger.info("🔄 Using LEGACY MultiTransferAutomation approach")
-            return await self._create_payment_legacy(user_id, amount, currency_from, currency_to)
-    
-    async def _create_payment_legacy(
-        self, 
-        user_id: int, 
-        amount: float,
-        currency_from: str = "RUB",
-        currency_to: str = "TJS"
-    ) -> Dict[str, Any]:
-        """
-        LEGACY метод: Использует существующую логику с MultiTransferAutomation
-        """
         start_time = datetime.utcnow()
         payment_record = None
         
@@ -188,100 +165,6 @@ class PaymentService:
             
         except Exception as e:
             logger.error(f"❌ Payment service error: {e}")
-            
-            # Обновляем статус платежа при ошибке
-            try:
-                if payment_record:
-                    payment_record.status = "failed"
-                    payment_record.error_message = str(e)
-                    payment_record.processing_time = int((datetime.utcnow() - start_time).total_seconds())
-                    await self.payment_repo.update_payment(payment_record)
-            except Exception as update_error:
-                logger.error(f"Failed to update payment record: {update_error}")
-            
-            raise PaymentError(f"Payment processing failed: {str(e)}")
-    
-    async def _create_payment_with_browser_manager(
-        self, 
-        user_id: int, 
-        amount: float,
-        currency_from: str = "RUB",
-        currency_to: str = "TJS"
-    ) -> Dict[str, Any]:
-        """
-        НОВЫЙ метод: Использует BrowserManager (адаптировано из тестов)
-        """
-        start_time = datetime.utcnow()
-        payment_record = None
-        
-        try:
-            # Валидация суммы
-            if not validate_amount(amount):
-                raise PaymentError(f"Invalid amount: {amount}")
-            
-            # Получаем реквизиты пользователя
-            user_requisites = await self.user_repo.get_user_requisites(user_id)
-            if not user_requisites:
-                raise PaymentError("User requisites not found. Please set up requisites first using /изменить_реквизиты")
-            
-            # Валидация номера карты
-            if not validate_card_number(user_requisites.recipient_card):
-                raise PaymentError(f"Invalid card number: {user_requisites.recipient_card}")
-            
-            # Получаем случайные паспортные данные
-            passport_data = await self.passport_repo.get_random_passport()
-            if not passport_data:
-                raise PaymentError("No passport data available for payment processing")
-            
-            logger.info(f"🔍 FULL passport data content: {passport_data.to_dict()}")
-            
-            # Отмечаем использование паспорта
-            await self.passport_repo.mark_passport_used(passport_data.id)
-            
-            # Создаем запись в истории платежей
-            payment_record = PaymentHistory(
-                user_id=user_id,
-                amount=amount,
-                currency_from=currency_from,
-                currency_to=currency_to,
-                status="pending"
-            )
-            
-            payment_record = await self.payment_repo.create_payment(payment_record)
-            payment_id = payment_record.id
-            
-            logger.info(f"💾 Created payment record ID: {payment_id}")
-            
-            # НОВАЯ ЛОГИКА: Используем BrowserManager
-            logger.info("🚀 Starting browser automation with BrowserManager...")
-            
-            browser_manager = self.browser_manager_factory(self.config, proxy_manager=self.proxy_manager)
-            async with browser_manager:
-                success = await browser_manager.start_browser(use_proxy=True)
-                if not success:
-                    raise AutomationError("Failed to start browser with proxy")
-                
-                # Адаптированная логика из тестов (пока заглушка)
-                # TODO: Адаптировать шаги из test_complete_automation.py
-                result_data = {
-                    "status": "success",
-                    "payment_id": payment_id,
-                    "qr_code": "test_qr_code",  # Заглушка
-                    "message": "BrowserManager integration successful"
-                }
-            
-            # Обновляем запись платежа
-            processing_time = int((datetime.utcnow() - start_time).total_seconds())
-            payment_record.status = "completed"
-            payment_record.processing_time = processing_time
-            payment_record.qr_code = result_data.get("qr_code")
-            await self.payment_repo.update_payment(payment_record)
-            
-            logger.info(f"✅ Payment {payment_id} completed successfully in {processing_time}s")
-            return result_data
-            
-        except Exception as e:
-            logger.error(f"❌ Payment service error (BrowserManager): {e}")
             
             # Обновляем статус платежа при ошибке
             try:

@@ -70,26 +70,38 @@ class Proxy6Provider:
         self._current_proxy_index = 0
         self._failed_proxies = set()
         
-        # Статические прокси от Proxy6.net
+        # Статические прокси от Proxy6.net (приоритет: Германия > Россия)
         self._static_proxies = [
+            # Немецкий SOCKS5 прокси (переформатирован, приоритет)
             {
-                'id': 'proxy6_1',
+                'id': 'proxy6_de_socks5',
+                'ip': '196.16.220.52',
+                'port': '8000',
+                'user': 'GALsB4',
+                'pass': '6UwJ3b',
+                'country': 'de',
+                'type': 'socks5',
+                'active': True
+            },
+            # Российские прокси (fallback)
+            {
+                'id': 'proxy6_ru_1',
                 'ip': '45.10.65.50',
                 'port': '8000',
                 'user': '2G4L9A',
                 'pass': 'pphKeV',
                 'country': 'ru',
-                'type': 'socks5',
+                'type': 'http',
                 'active': True
             },
             {
-                'id': 'proxy6_2', 
+                'id': 'proxy6_ru_2', 
                 'ip': '45.135.31.34',
                 'port': '8000',
                 'user': 'gzqPrg',
                 'pass': 'SJHhke',
                 'country': 'ru',
-                'type': 'socks5',
+                'type': 'http',
                 'active': True
             }
         ]
