@@ -31,11 +31,18 @@ pip install -r requirements.txt
 # Run the bot
 python main.py
 
-# Run tests
-python -m pytest tests/
+# Test proxy configuration (disable VPN first!)
+curl --proxy http://GALsB4:6UwJ3b@196.16.220.52:8000 http://httpbin.org/ip
 
-# Run specific automation test
-python tests/automation/test_complete_automation.py
+# Run automation test with proxy
+PYTHONPATH=. python3 tests/automation/test_complete_automation.py
+
+# Enable/disable proxy for testing
+rm -f /tmp/proxy_disabled  # Enable proxy
+touch /tmp/proxy_disabled  # Disable proxy
+
+# Monitor proxy logs
+tail -f logs/app.log | grep -i proxy
 ```
 
 ### Database
@@ -54,7 +61,7 @@ The bot uses SQLite by default (`data/bot.db`). Database migrations are handled 
 1. User configures recipient details via the `/settings` command, which uses an FSM flow
 2. User initiates payment with the `/payment [amount]` command
 3. `PaymentService` validates the request and retrieves the next available sender profile using the smart rotation logic
-4. `MultiTransferAutomation` launches a browser with a fresh Russian proxy, fills all forms, and solves captchas if they appear
+4. `MultiTransferAutomation` launches a browser with a fresh proxy (German SOCKS5 priority), fills all forms, and solves captchas if they appear
 5. The final result (QR code, payment URL) or an error message is returned to the user
 
 ### Browser Automation

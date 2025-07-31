@@ -25,7 +25,6 @@ from core.database.connection import AsyncSessionLocal, engine, Base
 from core.database.repositories import UserRepository, UserRequisitesRepository, PaymentHistoryRepository
 from core.services.payment_service import PaymentService
 from core.proxy.manager import ProxyManager
-from web.browser.manager import BrowserManager
 from utils.validators import validate_card_number
 from utils.exceptions import PaymentError
 
@@ -574,38 +573,8 @@ async def command_payment_handler(message: Message) -> None:
             try:
                 logger.info(f"🚀 Starting payment automation for user {message.from_user.id}")
                 
-                # НОВАЯ ЛОГИКА: Создаем фабрику для BrowserManager (с тестовой конфигурацией)
-                def browser_manager_factory(config, proxy_manager):
-                    browser_config = {
-                        'browser': {
-                            'headless': False,  # Используем headless=False как в тестах
-                            'window_size': '1920,1080',
-                            'page_load_timeout': 30,  # Как в тестах
-                            'implicit_wait': 10,
-                            'user_agents': [
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-                            ]
-                        }
-                    }
-                    
-                    # Создаем BrowserManager и отключаем строгие проверки для основного бота
-                    browser_manager = BrowserManager(browser_config, proxy_manager=proxy_manager)
-                    
-                    # ПАТЧ: Полностью отключаем browser connection test для основного бота
-                    async def skip_test():
-                        """Пропускаем тест соединения для основного бота"""
-                        logger.info("✅ Browser connection test SKIPPED (production mode)")
-                        return True
-                    
-                    browser_manager._test_browser_connection = skip_test
-                    return browser_manager
-                
-                # Create payment using PaymentService с новой фабрикой
-                payment_service = PaymentService(
-                    session, 
-                    proxy_manager=proxy_manager,
-                    browser_manager_factory=browser_manager_factory
-                )
+                # Create payment using PaymentService
+                payment_service = PaymentService(session, proxy_manager=proxy_manager)
                 result = await payment_service.create_payment(
                     user_id=message.from_user.id,
                     amount=amount,
