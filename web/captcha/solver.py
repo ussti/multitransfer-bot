@@ -22,6 +22,7 @@ class CaptchaSolver:
         self.config = config or {}
         captcha_config = self.config.get('captcha', {})
         
+        
         # Basic settings
         self.enabled = bool(captcha_config.get('api_key'))
         self.provider = captcha_config.get('provider', 'anti-captcha')
@@ -72,20 +73,30 @@ class CaptchaSolver:
         Returns:
             True если капча решена успешно, False если нет капчи или ошибка
         """
-        if not self.enabled:
-            logger.warning("🔐 CAPTCHA solver DISABLED (no API key), skipping")
-            return True
-        
-        max_attempts = max_attempts or self.max_attempts
+        # ИСПРАВЛЕНО: ЧЕСТНАЯ проверка CAPTCHA - НЕ ВРЕМ!
         logger.info("🔍 Checking for CAPTCHA...")
-        
-        # Check if captcha exists
         captcha_found = await self._detect_captcha(driver)
         if not captcha_found:
             logger.info("✅ No CAPTCHA found, proceeding")
             return True
         
-        logger.info("🔐 CAPTCHA detected, starting FIXED solve process...")
+        logger.info("🔐 CAPTCHA detected!")
+        
+        # Если нет API ключа - используем только Generic Click
+        if not self.enabled:
+            logger.warning("🔐 No API key, trying Generic Click only...")
+            logger.info("🎯 Trying Generic Click...")
+            success = await self._solve_generic_captcha(driver)
+            if success:
+                logger.info("✅ CAPTCHA solved via Generic Click")
+                return True
+            else:
+                logger.error("❌ CRITICAL: CAPTCHA NOT SOLVED - stopping process")
+                return False
+        
+        # Если есть API ключ - используем полный функционал
+        max_attempts = max_attempts or self.max_attempts
+        logger.info("🔐 CAPTCHA detected, starting FULL solve process with API...")
         
         # Strategy: Try all methods with proper error handling
         for attempt in range(max_attempts):
@@ -446,14 +457,24 @@ class CaptchaSolver:
                     for element in elements:
                         if element.is_displayed() and element.is_enabled():
                             logger.info(f"🔍 Found clickable captcha element: {selector}")
-                            element.click()
-                            await asyncio.sleep(2)
-                            
-                            # Check if captcha disappeared
-                            if not await self._detect_captcha(driver):
-                                logger.info("✅ Generic captcha solved by clicking")
-                                return True
-                except:
+                            try:
+                                element.click()
+                                logger.info("🖱️ Clicked on captcha element")
+                                await asyncio.sleep(1)  # УСКОРЕННАЯ проверка
+                                
+                                # Check if captcha disappeared - МАКСИМАЛЬНО БЫСТРАЯ проверка
+                                logger.info("🔍 Checking if captcha disappeared after click...")
+                                captcha_still_present = await self._detect_captcha_instant(driver)
+                                if not captcha_still_present:
+                                    logger.info("✅ Generic captcha solved by clicking")
+                                    return True
+                                else:
+                                    logger.warning("⚠️ Captcha still present after click")
+                            except Exception as click_error:
+                                logger.error(f"❌ Click failed: {click_error}")
+                                continue
+                except Exception as find_error:
+                    logger.error(f"❌ Element search failed for {selector}: {find_error}")
                     continue
             
             logger.debug("❌ Generic captcha solving failed")
@@ -593,6 +614,50 @@ class CaptchaSolver:
                 continue
         
         return False
+    
+    async def _detect_captcha_fast(self, driver) -> bool:
+        """БЫСТРАЯ проверка наличия капчи - только основные селекторы"""
+        # Только самые важные и быстрые селекторы
+        fast_captcha_selectors = [
+            "//iframe[contains(@src, 'captcha.yandex')]",  # Yandex CAPTCHA iframe
+            "//div[contains(@class, 'CheckboxCaptcha')]",   # Yandex checkbox
+            "//div[contains(@class, 'captcha')]",          # Generic captcha
+            "//*[contains(@class, 'recaptcha')]"           # reCAPTCHA
+        ]
+        
+        for selector in fast_captcha_selectors:
+            try:
+                # Используем быстрый поиск без ожидания
+                elements = driver.find_elements(By.XPATH, selector)
+                if elements:  # Если элементы найдены
+                    for element in elements:
+                        try:
+                            if element.is_displayed():
+                                logger.debug(f"🔍 CAPTCHA still found with selector: {selector}")
+                                return True
+                        except:
+                            continue
+            except:
+                continue
+        
+        return False
+    
+    async def _detect_captcha_instant(self, driver) -> bool:
+        """МАКСИМАЛЬНО БЫСТРАЯ проверка - только один основной селектор"""
+        try:
+            # Только главный селектор Yandex CAPTCHA
+            elements = driver.find_elements(By.XPATH, "//iframe[contains(@src, 'captcha.yandex')]")
+            if elements:
+                for element in elements:
+                    try:
+                        if element.is_displayed():
+                            logger.debug("🔍 CAPTCHA still present (instant check)")
+                            return True
+                    except:
+                        continue
+            return False
+        except:
+            return False
     
     def get_stats(self) -> Dict[str, Any]:
         """Get captcha solver statistics"""

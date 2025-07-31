@@ -22,6 +22,7 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from core.proxy.manager import ProxyManager
 from core.proxy.providers import ProxyInfo
+from web.captcha.solver import CaptchaSolver
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class BrowserManager:
         self.captcha_plugin_enabled = captcha_config.get('plugin_enabled', True)
         self.captcha_plugin_path = captcha_config.get('plugin_path', 'plugins')
         self.captcha_api_key = captcha_config.get('api_key')
+        
+        # ИСПРАВЛЕНО: Создаем CaptchaSolver как в legacy режиме (MultiTransferAutomation)
+        self.captcha_solver = CaptchaSolver(config)
         
         # Production settings
         self.environment = config.get('railway', {}).get('environment', 'development')
@@ -260,64 +264,65 @@ class BrowserManager:
         user_agent = random.choice(self.user_agents)
         chrome_options.add_argument(f"--user-agent={user_agent}")
         
-        # Proxy configuration
+        # Proxy configuration - SIMPLIFIED APPROACH
         if proxy:
             if proxy.type == "http":
                 chrome_options.add_argument(f"--proxy-server=http://{proxy.host}:{proxy.port}")
             elif proxy.type == "socks":
                 chrome_options.add_argument(f"--proxy-server=socks5://{proxy.host}:{proxy.port}")
             
-            # ВАЖНО: Добавляем аутентификацию прокси
+            # ИСПРАВЛЕНО: Включаем обратно расширение прокси-аутентификации
+            # (SSH туннель отключен в config.yml: use_ssh_tunnel: false)
             if proxy.user and proxy.password:
-                # Создаем расширение для прокси аутентификации
+                logger.info("🔧 Creating proxy authentication extension")
                 self._create_proxy_auth_extension(proxy.user, proxy.password)
-                # Добавляем расширение в Chrome
-                auth_extension_path = os.path.join(os.getcwd(), 'proxy_auth_extension')
-                if os.path.exists(auth_extension_path):
-                    chrome_options.add_argument(f"--load-extension={auth_extension_path}")
+                
+                # Добавляем расширение прокси-аутентификации к уже загруженным расширениям
+                extension_path = os.path.join(os.getcwd(), 'proxy_auth_extension')
+                if os.path.exists(extension_path):
+                    if self.plugin_loaded:
+                        # Комбинируем Anti-Captcha плагин + Proxy Auth расширение
+                        plugin_path = os.path.abspath(self.captcha_plugin_path)
+                        chrome_options.add_argument(f"--load-extension={plugin_path},{extension_path}")
+                        logger.info("🔌 Loaded Anti-Captcha plugin + Proxy Auth extension")
+                    else:
+                        # Загружаем только Proxy Auth расширение
+                        chrome_options.add_argument(f"--load-extension={extension_path}")
+                        logger.info("🔌 Loaded Proxy Auth extension only")
+            else:
+                logger.warning("⚠️ No proxy credentials - browser may show auth dialog")
         
-        # Anti-Captcha plugin configuration
+        # ИСПРАВЛЕНО: ВОЗВРАЩАЕМ ПЛАГИН ДЛЯ БЫСТРОГО РЕШЕНИЯ CAPTCHA
+        logger.info("🔌 CAPTCHA PLUGIN RE-ENABLED FOR FAST CAPTCHA SOLVING")
+        # self.plugin_loaded = False  # ОТКЛЮЧАЕМ ЭТУ СТРОКУ
+        
+        # Anti-Captcha plugin configuration - ВОССТАНАВЛИВАЕМ ДЛЯ БЫСТРОГО РЕШЕНИЯ CAPTCHA
         if self._check_plugin_availability():
             try:
                 plugin_path = os.path.abspath(self.captcha_plugin_path)
                 
-                # CORRECT way to load plugin in Selenium
-                chrome_options.add_argument(f"--disable-extensions-except={plugin_path}")
+                # Загружаем ТОЛЬКО Anti-Captcha плагин (без конфликтов)
                 chrome_options.add_argument(f"--load-extension={plugin_path}")
                 
-                # Additional flags for plugin compatibility
+                # Минимальные флаги для совместимости с macOS + undetected-chromedriver
                 chrome_options.add_argument("--disable-web-security")
-                chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
                 chrome_options.add_argument("--allow-running-insecure-content")
                 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-                chrome_options.add_argument("--disable-infobars")
-                chrome_options.add_argument("--disable-background-timer-throttling")
-                chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-                chrome_options.add_argument("--disable-renderer-backgrounding")
                 
                 # REMOVE PROBLEMATIC OPTIONS FOR MACOS
                 # These options cause issues with undetected-chromedriver on macOS
                 # chrome_options.add_experimental_option("excludeSwitches", ["--disable-extensions", "--enable-automation"])
                 # chrome_options.add_experimental_option('useAutomationExtension', False)
                 
-                # Alternative approach - use prefs instead
+                # Используем только необходимые prefs
                 prefs = {
                     "profile.default_content_setting_values.notifications": 2,
                     "profile.default_content_settings.popups": 0,
-                    "profile.managed_default_content_settings.images": 2
                 }
                 chrome_options.add_experimental_option("prefs", prefs)
                 
-                # Production-specific settings
-                if self.environment == 'production':
-                    chrome_options.add_argument("--disable-logging")
-                    chrome_options.add_argument("--disable-gpu-logging")
-                    chrome_options.add_argument("--silent")
-                    chrome_options.add_argument("--disable-default-apps")
-                    chrome_options.add_argument("--disable-sync")
-                
                 self.plugin_loaded = True
-                logger.info("🔌 Anti-Captcha plugin loaded into Chrome (macOS compatible)")
+                logger.info("🔌 Anti-Captcha plugin loaded (single extension mode)")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to load Anti-Captcha plugin: {e}")
                 self.plugin_loaded = False

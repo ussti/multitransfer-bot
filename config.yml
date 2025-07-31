@@ -42,11 +42,11 @@ proxy:
   
 # API-only captcha configuration (без плагина)
 captcha:
-  provider: "${CAPTCHA_PROVIDER}"
-  api_key: "${CAPTCHA_API_KEY}"
-  timeout: "${CAPTCHA_TIMEOUT}"
-  max_attempts: "${CAPTCHA_MAX_ATTEMPTS}"
-  plugin_enabled: false  # Отключаем плагин
+  provider: "anti-captcha"
+  api_key: "0b08f459ac08cfbc80134acc46d7ed1f"  # Тот же ключ что в плагине
+  timeout: 120
+  max_attempts: 3
+  plugin_enabled: true   # ВКЛЮЧАЕМ плагин для быстрого решения
   plugin_path: "plugins"
   enabled: true
   

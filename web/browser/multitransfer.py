@@ -1363,22 +1363,73 @@ console.log('Proxy6 Auth Extension: Ready');
         logger.info("🔍 CRITICAL: Checking for SECOND CAPTCHA (50% probability)")
         await self._handle_potential_second_captcha()
         
-        # ДИАГНОСТИКА: ПОЛНЫЙ АНАЛИЗ DOM
-        logger.info("🔍 DIAGNOSTIC: Full DOM analysis for modal button")
-        await self._diagnostic_dom_analysis()
+        # ВОССТАНОВЛЕННЫЙ ПРОСТОЙ ПОДХОД: оригинальный селектор [last()]
+        logger.info("🎯 ORIGINAL: Using simple [last()] selector for modal button")
         
-        # ДИАГНОСТИЧЕСКАЯ попытка клика
-        logger.info("🎯 DIAGNOSTIC: Enhanced button finding with full analysis")
-        button_clicked = await self._diagnostic_button_click()
+        # ИСПРАВЛЕННЫЕ селекторы на основе скриншота модального окна
+        modal_button_selectors = [
+            # Любой элемент с текстом ПРОДОЛЖИТЬ (не только button)
+            "//*[contains(text(), 'ПРОДОЛЖИТЬ')]",  
+            "//*[contains(text(), 'Продолжить')]",
+            "//*[text()='ПРОДОЛЖИТЬ']",
+            "//*[text()='Продолжить']",
+            # В контексте модального окна "Проверка данных"
+            "//div[contains(text(), 'Проверка данных')]/following::*[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            "//div[contains(text(), 'Проверьте данные получателя')]/following::*[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            # Кликабельные элементы с текстом ПРОДОЛЖИТЬ
+            "//div[contains(text(), 'ПРОДОЛЖИТЬ') and contains(@class, 'btn')]",
+            "//a[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            "//span[contains(text(), 'ПРОДОЛЖИТЬ')]"
+        ]
+        
+        button_clicked = False
+        for selector in modal_button_selectors:
+            try:
+                button = self.find_element_fast(By.XPATH, selector, timeout=2)
+                if button and button.is_displayed():
+                    # КРИТИЧНО: Проверяем что это НЕ крестик закрытия
+                    button_text = button.text.strip() if hasattr(button, 'text') else ''
+                    button_html = button.get_attribute('outerHTML')[:100] if button else ''
+                    
+                    # Фильтруем вредные элементы
+                    if (button_text in ['×', '✕', 'X', 'x'] or 
+                        'close' in button_html.lower() or 
+                        'cross' in button_html.lower() or
+                        button.get_attribute('aria-label') in ['Close', 'Закрыть']):
+                        logger.debug(f"⚠️ Skipping close button: text='{button_text}', html='{button_html[:50]}'")
+                        continue
+                    
+                    logger.info(f"✅ FIXED: Found modal button with selector: {selector}")
+                    logger.info(f"   Button text: '{button_text}', HTML: '{button_html[:50]}'")
+                    
+                    # Скроллим к кнопке
+                    self._driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                    await asyncio.sleep(0.5)
+                    
+                    # Кликаем простым способом
+                    try:
+                        button.click()
+                        logger.info("✅ FIXED: Modal button clicked successfully")
+                        button_clicked = True
+                        break
+                    except:
+                        # Fallback к JavaScript клику
+                        self._driver.execute_script("arguments[0].click();", button)
+                        logger.info("✅ FIXED: Modal button clicked via JavaScript")
+                        button_clicked = True
+                        break
+            except Exception as e:
+                logger.debug(f"⚠️ Selector {selector} failed: {e}")
+                continue
         
         if button_clicked:
-            logger.info("✅ DIAGNOSTIC SUCCESS: Modal handled successfully!")
+            logger.info("✅ ORIGINAL SUCCESS: Modal handled with simple approach!")
             await asyncio.sleep(2)
             self.take_screenshot_conditional("step12_modal_success.png")
         else:
-            logger.error("❌ DIAGNOSTIC FAILURE: Could not handle modal")
+            logger.error("❌ ORIGINAL FAILURE: Could not find modal button")
             self.take_screenshot_conditional("step12_modal_failure.png")
-            raise Exception("DIAGNOSTIC: Failed to handle modal - payment cannot be completed")
+            raise Exception("ORIGINAL: Failed to handle modal - payment cannot be completed")
         
         elapsed = time.time() - step12_start
         logger.info(f"✅ Step 12 completed in {elapsed:.1f}s (modal found and processed)")
