@@ -82,42 +82,77 @@ class CaptchaSolver:
         
         logger.info("🔐 CAPTCHA detected!")
         
-        # Если нет API ключа - используем только Generic Click
-        if not self.enabled:
-            logger.warning("🔐 No API key, trying Generic Click only...")
-            logger.info("🎯 Trying Generic Click...")
-            success = await self._solve_generic_captcha(driver)
-            if success:
-                logger.info("✅ CAPTCHA solved via Generic Click")
-                return True
-            else:
-                logger.error("❌ CRITICAL: CAPTCHA NOT SOLVED - stopping process")
-                return False
+        # ПРОСТАЯ БЫСТРАЯ ОБРАБОТКА: только Generic Click без API
+        logger.info("🎯 Trying Generic Click...")
+        success = await self._solve_generic_captcha(driver)
+        if success:
+            logger.info("✅ CAPTCHA solved via Generic Click")
+            return True
         
-        # Если есть API ключ - используем полный функционал
-        max_attempts = max_attempts or self.max_attempts
-        logger.info("🔐 CAPTCHA detected, starting FULL solve process with API...")
-        
-        # Strategy: Try all methods with proper error handling
-        for attempt in range(max_attempts):
-            try:
-                logger.info(f"🔄 CAPTCHA solve attempt {attempt + 1}/{max_attempts}")
-                
-                success = await self._solve_captcha_api_fixed(driver)
-                if success:
-                    logger.info("✅ CAPTCHA solved successfully!")
-                    return True
-                else:
-                    logger.warning(f"❌ CAPTCHA solve attempt {attempt + 1} failed")
-                    
-            except Exception as e:
-                logger.error(f"❌ CAPTCHA solve attempt {attempt + 1} error: {e}")
-                
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(2)  # Pause before next attempt
-        
-        logger.error("❌ All CAPTCHA solve attempts failed")
+        # Если Generic Click не помог - завершаем (как было раньше)
+        logger.warning("❌ CAPTCHA NOT SOLVED - Generic Click failed")
         return False
+    
+    async def _analyze_captcha_type(self, driver) -> str:
+        """Быстрый анализ типа капчи для выбора стратегии решения"""
+        try:
+            # Проверяем индикаторы сложных капч
+            complex_indicators = {
+                "yandex_smart": [
+                    "//iframe[contains(@src, 'captcha.yandex')]",
+                    "//div[contains(@class, 'CheckboxCaptcha')]",
+                    "//*[contains(text(), 'SmartCaptcha by Yandex')]",
+                    "//*[contains(text(), 'Move the slider')]"
+                ],
+                "recaptcha": [
+                    "//iframe[contains(@src, 'recaptcha')]",
+                    "//div[@class='g-recaptcha']",
+                    "//*[contains(@class, 'g-recaptcha')]"
+                ],
+                "image": [
+                    "//img[contains(@src, 'captcha')]",
+                    "//canvas[contains(@class, 'captcha')]",
+                    "//*[contains(text(), 'Enter the code')]",
+                    "//*[contains(text(), 'Type the characters')]"
+                ]
+            }
+            
+            # Быстрая проверка каждого типа
+            for captcha_type, selectors in complex_indicators.items():
+                for selector in selectors[:2]:  # Проверяем только первые 2 селектора для скорости
+                    try:
+                        elements = driver.find_elements(By.XPATH, selector)
+                        if any(el.is_displayed() for el in elements):
+                            logger.debug(f"🎯 Found {captcha_type} indicator: {selector}")
+                            return captcha_type
+                    except:
+                        continue
+            
+            # Если ничего сложного не найдено - считаем простой капчей
+            logger.debug("🎯 No complex captcha indicators found - assuming simple")
+            return "simple"
+            
+        except Exception as e:
+            logger.debug(f"❌ Captcha type analysis error: {e}")
+            return "unknown"
+    
+    async def _solve_captcha_by_type(self, driver, captcha_type: str) -> bool:
+        """Решение капчи специализированным методом по типу"""
+        try:
+            if captcha_type == "yandex_smart":
+                return await self._solve_yandex_smart_api_fixed(driver)
+            elif captcha_type == "recaptcha":
+                return await self._solve_recaptcha_api_fixed(driver)
+            elif captcha_type == "image":
+                return await self._solve_image_captcha_api_fixed(driver)
+            else:
+                # Для неизвестных типов используем общий подход
+                logger.info("🎯 Unknown captcha type - trying general API approach...")
+                return await self._solve_captcha_api_fixed(driver)
+                
+        except Exception as e:
+            logger.error(f"❌ Specialized {captcha_type} solve error: {e}")
+            return False
     
     async def _solve_captcha_api_fixed(self, driver) -> bool:
         """ИСПРАВЛЕННЫЙ API решатель с правильной приоритизацией"""
@@ -438,11 +473,11 @@ class CaptchaSolver:
             return None
     
     async def _solve_generic_captcha(self, driver) -> bool:
-        """Быстрое решение простых капч кликом"""
+        """Быстрое решение простых капч кликом (как было раньше)"""
         try:
             logger.info("🎯 Trying generic captcha solving (simple click)...")
             
-            # Try to find any captcha-related elements that can be clicked
+            # Простые селекторы для клика (как было раньше)
             clickable_selectors = [
                 "//div[contains(@class, 'captcha') and not(contains(@class, 'image'))]",
                 "//input[@type='checkbox' and contains(@id, 'captcha')]",
@@ -460,10 +495,9 @@ class CaptchaSolver:
                             try:
                                 element.click()
                                 logger.info("🖱️ Clicked on captcha element")
-                                await asyncio.sleep(1)  # УСКОРЕННАЯ проверка
+                                await asyncio.sleep(1)  # Как было раньше
                                 
-                                # Check if captcha disappeared - МАКСИМАЛЬНО БЫСТРАЯ проверка
-                                logger.info("🔍 Checking if captcha disappeared after click...")
+                                # Быстрая проверка исчезновения капчи
                                 captcha_still_present = await self._detect_captcha_instant(driver)
                                 if not captcha_still_present:
                                     logger.info("✅ Generic captcha solved by clicking")

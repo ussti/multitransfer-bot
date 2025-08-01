@@ -33,6 +33,8 @@ class PaymentService:
         self.proxy_manager = proxy_manager or ProxyManager(config=self.config.to_dict())
         # НОВЫЙ ПАРАМЕТР: фабрика для создания BrowserManager
         self.browser_manager_factory = browser_manager_factory
+        # ИСПРАВЛЕНИЕ: Инициализируем переменную для хранения QR URL
+        self._qr_page_url = None
         
     async def create_payment(
         self, 
@@ -215,6 +217,9 @@ class PaymentService:
         """
         start_time = datetime.utcnow()
         payment_record = None
+        
+        # ИСПРАВЛЕНИЕ: Сбрасываем QR URL в начале каждого платежа
+        self._qr_page_url = None
         
         try:
             # Валидация суммы
@@ -454,40 +459,30 @@ class PaymentService:
             # Шаг 4: Выбор валюты TJS
             logger.info("📍 Step 4: Select TJS currency")
             
-            # Множественные селекторы для поиска кнопки TJS
-            tjs_selectors = [
-                "//button[contains(text(), 'TJS')]",
-                "//div[contains(text(), 'TJS')]", 
-                "//*[contains(@class, 'currency') and contains(text(), 'TJS')]",
-                "//*[text()='TJS']"
-            ]
+            # ОПТИМИЗИРОВАНО: Используем только рабочий селектор для TJS
+            working_selector = "//*[text()='TJS']"
+            elements = await browser_manager.find_elements_safe(By.XPATH, working_selector)
+            logger.info(f"🚀 OPTIMIZED: Found {len(elements)} TJS elements with working selector")
             
             tjs_selected = False
-            for selector in tjs_selectors:
-                elements = await browser_manager.find_elements_safe(By.XPATH, selector)
-                logger.info(f"Found {len(elements)} TJS elements with selector: {selector}")
-                
-                for element in elements:
-                    try:
-                        if element.is_displayed() and element.is_enabled():
-                            logger.info("🎯 Clicking TJS currency button")
-                            await asyncio.sleep(random.uniform(0.3, 0.7))
-                            
-                            if await browser_manager.click_element_safe(element):
-                                logger.info("✅ Successfully selected TJS currency")
-                                tjs_selected = True
-                                break
-                            else:
-                                browser_manager.driver.execute_script("arguments[0].click();", element)
-                                logger.info("✅ Successfully selected TJS currency via JavaScript")
-                                tjs_selected = True
-                                break
-                    except Exception as e:
-                        logger.debug(f"TJS element click failed: {e}")
-                        continue
-                
-                if tjs_selected:
-                    break
+            for element in elements:
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        logger.info("🎯 Clicking TJS currency button")
+                        await asyncio.sleep(random.uniform(0.3, 0.7))
+                        
+                        if await browser_manager.click_element_safe(element):
+                            logger.info("✅ Successfully selected TJS currency")
+                            tjs_selected = True
+                            break
+                        else:
+                            browser_manager.driver.execute_script("arguments[0].click();", element)
+                            logger.info("✅ Successfully selected TJS currency via JavaScript")
+                            tjs_selected = True
+                            break
+                except Exception as e:
+                    logger.debug(f"TJS element click failed: {e}")
+                    continue
             
             if not tjs_selected:
                 raise AutomationError("Could not select TJS currency")
@@ -497,39 +492,29 @@ class PaymentService:
             # Шаг 5: Выбор способа перевода "Все карты"
             logger.info("📍 Step 5: Select 'Все карты' transfer method")
             
-            # Сначала ищем dropdown или кнопку для выбора способа перевода
-            transfer_method_selectors = [
-                "//div[contains(text(), 'Способ перевода')]//following-sibling::*",
-                "//div[contains(text(), 'Способ перевода')]//parent::*//div[contains(@class, 'dropdown') or contains(@class, 'select')]",
-                "//div[contains(@class, 'transfer-method') or contains(@class, 'method')]",
-                "//*[contains(text(), 'Выберите способ') or contains(text(), 'способ')]"
-            ]
+            # ОПТИМИЗИРОВАНО: Используем только рабочий селектор
+            working_selector = "//*[contains(text(), 'Выберите способ') or contains(text(), 'способ')]"
+            elements = await browser_manager.find_elements_safe(By.XPATH, working_selector)
+            logger.info(f"🚀 OPTIMIZED: Found {len(elements)} transfer method elements with working selector")
             
             method_dropdown_clicked = False
-            for selector in transfer_method_selectors:
-                elements = await browser_manager.find_elements_safe(By.XPATH, selector)
-                logger.info(f"Found {len(elements)} transfer method elements with selector: {selector}")
-                
-                for element in elements:
-                    try:
-                        if element.is_displayed():
-                            logger.info("🎯 Clicking transfer method dropdown")
-                            await asyncio.sleep(random.uniform(0.3, 0.7))
-                            
-                            if await browser_manager.click_element_safe(element):
-                                logger.info("✅ Successfully clicked transfer method dropdown")
-                                method_dropdown_clicked = True
-                                break
-                            else:
-                                browser_manager.driver.execute_script("arguments[0].click();", element)
-                                logger.info("✅ Successfully clicked transfer method dropdown via JavaScript")
-                                method_dropdown_clicked = True
-                                break
-                    except:
-                        continue
-                
-                if method_dropdown_clicked:
-                    break
+            for element in elements:
+                try:
+                    if element.is_displayed():
+                        logger.info("🎯 Clicking transfer method dropdown")
+                        await asyncio.sleep(random.uniform(0.3, 0.7))
+                        
+                        if await browser_manager.click_element_safe(element):
+                            logger.info("✅ Successfully clicked transfer method dropdown")
+                            method_dropdown_clicked = True
+                            break
+                        else:
+                            browser_manager.driver.execute_script("arguments[0].click();", element)
+                            logger.info("✅ Successfully clicked transfer method dropdown via JavaScript")
+                            method_dropdown_clicked = True
+                            break
+                except:
+                    continue
             
             await asyncio.sleep(3)
             
@@ -1050,61 +1035,10 @@ class PaymentService:
     async def _diagnostic_button_click_legacy(self, driver) -> bool:
         """ВОССТАНОВЛЕННАЯ ОРИГИНАЛЬНАЯ РЕАЛИЗАЦИЯ: Быстрая обработка модального окна"""
         try:
-            logger.info("🏃‍♂️ ORIGINAL FAST: Modal handling step 12 (restored from pre-proxy)")
+            logger.info("🏃‍♂️ FAST: Modal handling step 12")
             
             await asyncio.sleep(0.5)  # Минимальное ожидание модального окна (оригинал)
             
-            # КОМПЛЕКСНАЯ ДИАГНОСТИКА: Сначала исследуем DOM модального окна
-            logger.info("🔍 ДИАГНОСТИКА: Анализируем DOM модального окна...")
-            
-            # Находим все элементы с текстом ПРОДОЛЖИТЬ
-            diagnostic_script = """
-            var results = [];
-            var allElements = document.querySelectorAll('*');
-            
-            for (var i = 0; i < allElements.length; i++) {
-                var el = allElements[i];
-                var text = (el.textContent || el.innerText || '').trim();
-                
-                if (text.includes('ПРОДОЛЖИТЬ') || text.includes('Продолжить')) {
-                    var rect = el.getBoundingClientRect();
-                    var styles = window.getComputedStyle(el);
-                    
-                    results.push({
-                        index: i,
-                        tagName: el.tagName,
-                        text: text.substring(0, 50),
-                        className: el.className || '',
-                        id: el.id || '',
-                        visible: rect.width > 0 && rect.height > 0 && styles.display !== 'none',
-                        position: {
-                            x: Math.round(rect.left),
-                            y: Math.round(rect.top),
-                            width: Math.round(rect.width),
-                            height: Math.round(rect.height)
-                        },
-                        backgroundColor: styles.backgroundColor,
-                        color: styles.color,
-                        outerHTML: el.outerHTML.substring(0, 200)
-                    });
-                }
-            }
-            
-            return results;
-            """
-            
-            try:
-                diagnostic_results = driver.execute_script(diagnostic_script)
-                logger.info(f"🔍 ДИАГНОСТИКА: Найдено {len(diagnostic_results)} элементов с 'ПРОДОЛЖИТЬ'")
-                
-                for i, result in enumerate(diagnostic_results):
-                    logger.info(f"  Элемент {i+1}: {result['tagName']} - '{result['text']}'")
-                    logger.info(f"    Видимый: {result['visible']}, Позиция: {result['position']}")
-                    logger.info(f"    Цвета: bg={result['backgroundColor']}, color={result['color']}")
-                    logger.info(f"    HTML: {result['outerHTML'][:100]}...")
-                    
-            except Exception as e:
-                logger.error(f"❌ ДИАГНОСТИКА: Ошибка анализа DOM: {e}")
             
             # ИСПРАВЛЕННЫЕ СЕЛЕКТОРЫ: ТОЛЬКО модальное окно (Элемент 18 из диагностики)
             modal_button_selectors = [
@@ -1205,20 +1139,74 @@ class PaymentService:
                         try:
                             button.click()
                             logger.info("✅ КЛИК: Обычный клик выполнен")
-                            await asyncio.sleep(2)  # Ждем 2 секунды
+                            # Увеличиваем задержку для полной загрузки QR страницы
+                            logger.info("⏳ Ожидание загрузки QR страницы...")
+                            await asyncio.sleep(5)  # Увеличиваем до 5 секунд
                             
-                            # Проверяем URL ПОСЛЕ клика
-                            url_after = driver.current_url
-                            logger.info(f"📍 URL ПОСЛЕ клика: {url_after}")
+                            # Проверяем состояние страницы после клика
+                            success_detected = False
+                            final_url = driver.current_url
+                            logger.info(f"📍 URL ПОСЛЕ клика (5s): {final_url}")
                             
-                            if url_after != url_before:
-                                if 'transferId=' in url_after and 'paymentSystemTransferNum=' in url_after:
-                                    logger.info("🎉 УСПЕХ: Попали на страницу с QR! URL изменился правильно")
-                                    return True
-                                else:
-                                    logger.warning(f"⚠️ URL изменился, но нет параметров QR: {url_after}")
+                            # ИНДИКАТОР 1: Проверяем URL с QR параметрами
+                            if 'transferId=' in final_url and 'paymentSystemTransferNum=' in final_url:
+                                logger.info("🎉 УСПЕХ 1: URL содержит QR параметры!")
+                                success_detected = True
+                            
+                            # ИНДИКАТОР 2: Проверяем исчезновение модального окна
+                            try:
+                                modal_present = driver.find_elements(By.XPATH, "//div[@role='presentation']")
+                                if not modal_present or not modal_present[0].is_displayed():
+                                    logger.info("🎉 УСПЕХ 2: Модальное окно исчезло!")
+                                    success_detected = True
+                            except:
+                                pass
+                            
+                            # ИНДИКАТОР 3: Ищем QR код с улучшенными селекторами
+                            qr_selectors = [
+                                "//canvas",  # QR коды часто в canvas элементах
+                                "//img[contains(@src, 'qr')]",
+                                "//img[contains(@alt, 'QR')]", 
+                                "//*[contains(@class, 'qr')]",
+                                "//img[starts-with(@src, 'data:image')]",  # Base64 изображения
+                                "//*[contains(text(), 'Отсканируйте')]"  # Текст под QR кодом
+                            ]
+                            
+                            for qr_selector in qr_selectors:
+                                try:
+                                    qr_element = driver.find_element(By.XPATH, qr_selector)
+                                    if qr_element and qr_element.is_displayed():
+                                        logger.info(f"🎉 УСПЕХ 3: QR элемент найден с селектором: {qr_selector}")
+                                        success_detected = True
+                                        break
+                                except:
+                                    continue
+                            
+                            # ИНДИКАТОР 4: Ищем текст "3 из 3" или другие индикаторы финальной страницы
+                            final_page_indicators = [
+                                "//*[contains(text(), '3 из 3')]",
+                                "//*[contains(text(), 'СБП')]",
+                                "//*[contains(text(), 'Отсканируйте QR-код')]",
+                                "//*[contains(text(), 'Подтвердите оплату')]"
+                            ]
+                            
+                            for indicator in final_page_indicators:
+                                try:
+                                    element = driver.find_element(By.XPATH, indicator)
+                                    if element and element.is_displayed():
+                                        logger.info(f"🎉 УСПЕХ 4: Найден индикатор финальной страницы: {element.text[:30]}")
+                                        success_detected = True
+                                        break
+                                except:
+                                    continue
+                            
+                            if success_detected:
+                                logger.info("🎉 ОБЩИЙ УСПЕХ: Обнаружены индикаторы QR страницы!")
+                                self._qr_page_url = final_url
+                                logger.info("💾 СОХРАНЕН успешный URL для Step 14")
+                                return True
                             else:
-                                logger.warning("⚠️ URL НЕ изменился - возможно кликнули не ту кнопку")
+                                logger.warning("⚠️ Не найдено индикаторов успеха - возможно кликнули не ту кнопку")
                             
                         except Exception as click_error:
                             logger.warning(f"⚠️ Обычный клик не сработал: {click_error}")
@@ -1226,13 +1214,41 @@ class PaymentService:
                             try:
                                 driver.execute_script("arguments[0].click();", button)
                                 logger.info("✅ КЛИК: JavaScript клик выполнен")
-                                await asyncio.sleep(2)
+                                await asyncio.sleep(3)  # Увеличиваем задержку для JS клика
                                 
                                 url_after_js = driver.current_url
                                 logger.info(f"📍 URL ПОСЛЕ JS клика: {url_after_js}")
                                 
+                                # ИСПРАВЛЕНИЕ: Те же множественные индикаторы для JS клика
+                                js_success_detected = False
+                                
+                                # Проверяем QR параметры в URL
                                 if 'transferId=' in url_after_js and 'paymentSystemTransferNum=' in url_after_js:
-                                    logger.info("🎉 УСПЕХ: JS клик привел на страницу с QR!")
+                                    logger.info("🎉 JS УСПЕХ 1: URL содержит QR параметры!")
+                                    js_success_detected = True
+                                
+                                # Проверяем QR код на странице
+                                try:
+                                    qr_element = driver.find_element(By.XPATH, "//img[contains(@alt, 'QR') or contains(@src, 'qr')] | //canvas")
+                                    if qr_element and qr_element.is_displayed():
+                                        logger.info("🎉 JS УСПЕХ 2: QR код найден!")
+                                        js_success_detected = True
+                                except:
+                                    pass
+                                
+                                # Проверяем "3 из 3"
+                                try:
+                                    final_step = driver.find_element(By.XPATH, "//*[contains(text(), '3 из 3')]")
+                                    if final_step and final_step.is_displayed():
+                                        logger.info("🎉 JS УСПЕХ 3: Финальная страница '3 из 3'!")
+                                        js_success_detected = True
+                                except:
+                                    pass
+                                
+                                if js_success_detected:
+                                    logger.info("🎉 JS ОБЩИЙ УСПЕХ: JS клик привел на QR страницу!")
+                                    self._qr_page_url = url_after_js
+                                    logger.info("💾 СОХРАНЕН успешный URL для Step 14 (JS)")
                                     return True
                                 else:
                                     logger.warning(f"⚠️ JS клик тоже не привел к QR странице: {url_after_js}")
@@ -1718,7 +1734,12 @@ class PaymentService:
             current_url = driver.current_url
             logger.info(f"📍 Final URL: {current_url}")
             
-            # Проверяем что мы не на главной странице
+            # ИСПРАВЛЕНИЕ: Проверяем если URL уже был определен как успешный в Step 12
+            if hasattr(self, '_qr_page_url') and self._qr_page_url:
+                logger.info(f"💾 ИСПОЛЬЗУЕМ сохраненный URL из Step 12: {self._qr_page_url}")
+                current_url = self._qr_page_url
+            
+            # Проверяем что мы на правильной странице
             if current_url == "https://multitransfer.ru" or current_url == "https://multitransfer.ru/":
                 logger.warning("⚠️ Still on homepage - payment may have failed")
                 return {
@@ -1728,27 +1749,65 @@ class PaymentService:
                     "qr_code_url": None
                 }
             
-            # Ищем QR-код
+            # ИСПРАВЛЕНИЕ: Проверяем успешный URL с transferId и paymentSystemTransferNum
+            if 'transferId=' in current_url and 'paymentSystemTransferNum=' in current_url:
+                logger.info("🎉 УСПЕХ: Обнаружена страница с QR - URL содержит transferId и paymentSystemTransferNum!")
+                # Это успешная QR страница - продолжаем поиск QR кода
+            elif '/transfer/' in current_url:
+                logger.info("🎯 ХОРОШО: На странице перевода - ищем QR код")
+            else:
+                logger.warning(f"⚠️ Неожиданный URL: {current_url}")
+                # Но продолжаем попытку найти QR код
+            
+            # УЛУЧШЕННЫЙ ПОИСК QR-КОДА
             qr_code_url = None
+            logger.info("🔍 Ищем QR код на странице...")
+            
+            # Расширенные селекторы для QR кода
             qr_selectors = [
+                "//canvas",  # QR коды часто в canvas элементах
+                "//img[starts-with(@src, 'data:image')]",  # Base64 изображения
                 "//img[contains(@src, 'qr')]",
                 "//img[contains(@alt, 'QR')]",
-                "//canvas[contains(@class, 'qr')]",
-                "//img[contains(@src, 'data:image') and contains(@src, 'qr')]",
-                "//*[contains(@class, 'qr-code')]//img"
+                "//*[contains(@class, 'qr')]//img",
+                "//*[contains(@class, 'qr')]//canvas",
+                "//img[contains(@src, 'png')]",  # PNG изображения (QR часто в PNG)
+                "//img[contains(@src, 'svg')]",  # SVG QR коды
             ]
             
-            for selector in qr_selectors:
+            for i, selector in enumerate(qr_selectors, 1):
                 try:
-                    element = driver.find_element(By.XPATH, selector)
-                    if element and element.is_displayed():
-                        qr_url = element.get_attribute("src")
-                        if qr_url and ('qr' in qr_url.lower() or 'data:image' in qr_url):
-                            qr_code_url = qr_url
-                            logger.info(f"✅ QR code found: {qr_url[:50]}...")
-                            break
-                except:
-                    continue
+                    elements = driver.find_elements(By.XPATH, selector)
+                    logger.info(f"🔍 Selector {i}: {selector} - найдено {len(elements)} элементов")
+                    
+                    for element in elements:
+                        if element and element.is_displayed():
+                            # Для canvas элементов
+                            if element.tag_name.lower() == 'canvas':
+                                # Конвертируем canvas в base64
+                                canvas_data = driver.execute_script(
+                                    "return arguments[0].toDataURL('image/png');", element
+                                )
+                                if canvas_data and canvas_data.startswith('data:image'):
+                                    qr_code_url = canvas_data
+                                    logger.info("✅ QR код найден в CANVAS элементе!")
+                                    break
+                            else:
+                                # Для img элементов
+                                qr_url = element.get_attribute("src")
+                                if qr_url:
+                                    qr_code_url = qr_url
+                                    logger.info(f"✅ QR код найден в IMG: {qr_url[:50]}...")
+                                    break
+                    
+                    if qr_code_url:
+                        break
+                        
+                except Exception as e:
+                    logger.debug(f"⚠️ Selector {i} failed: {e}")
+            
+            if not qr_code_url:
+                logger.warning("⚠️ QR код не найден, но URL успешный - возвращаем ссылку")
             
             # Возвращаем результат
             return {

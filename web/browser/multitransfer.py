@@ -56,13 +56,11 @@ class MultiTransferAutomation:
             ],
             
             'currency_tjs': [
-                "//button[contains(text(), 'TJS')]",
-                "//*[text()='TJS']"
+                "//*[text()='TJS']"  # ОПТИМИЗИРОВАНО: только рабочий селектор
             ],
             
             'transfer_method_dropdown': [
-                "//div[contains(text(), 'Способ перевода')]//following-sibling::*",
-                "//*[contains(text(), 'способ')]"
+                "//*[contains(text(), 'Выберите способ') or contains(text(), 'способ')]"  # ОПТИМИЗИРОВАНО: только рабочий селектор
             ],
             
             'korti_milli_option': [
@@ -156,8 +154,7 @@ class MultiTransferAutomation:
             
             # DEBUG MODE START - Проверяем режим отладки
             debug_mode = os.getenv('DEBUG_BROWSER', 'false').lower() == 'true'
-            proxy_disabled_file = "/tmp/proxy_disabled"
-            visual_debug = os.path.exists(proxy_disabled_file) or debug_mode
+            visual_debug = debug_mode
             
             if visual_debug:
                 # РЕЖИМ ОТЛАДКИ - браузер будет видимым и полнофункциональным
@@ -945,11 +942,23 @@ console.log('Proxy6 Auth Extension: Ready');
             await self._fast_fill_forms(payment_data)
             await self._fast_submit_and_captcha()
             
-            # ИСПРАВЛЕННЫЙ Step 12: Модальное окно "Проверка данных" с ВТОРОЙ КАПЧЕЙ
-            await self._fast_handle_modal_with_second_captcha()
+            # ОПТИМИЗИРОВАНО: Пропуск шагов при раннем QR успехе
+            if hasattr(self, 'early_qr_success') and self.early_qr_success:
+                logger.info("🚀 ОПТИМИЗАЦИЯ: Пропуск Step 12 - QR страница уже обнаружена!")
+            else:
+                # ИСПРАВЛЕННЫЙ Step 12: Модальное окно "Проверка данных" с ВТОРОЙ КАПЧЕЙ
+                await self._fast_handle_modal_with_second_captcha()
             
-            # Step 13: ФИНАЛЬНАЯ кнопка "ПРОДОЛЖИТЬ" после обработки модального окна
-            await self._final_continue_button_click()
+            # ОПТИМИЗИРОВАНО: Пропуск Step 13 при раннем QR успехе
+            if hasattr(self, 'early_qr_success') and self.early_qr_success:
+                logger.info("🚀 ОПТИМИЗАЦИЯ: Пропуск Step 13 - QR страница уже обнаружена!")
+            else:
+                # Step 13: ФИНАЛЬНАЯ кнопка "ПРОДОЛЖИТЬ" после обработки модального окна (только если не на QR странице)
+                current_url_check = self._driver.current_url
+                if 'transferId=' in current_url_check and 'paymentSystemTransferNum=' in current_url_check:
+                    logger.info("🎉 ПРОПУСК Step 13: Уже на финальной странице с QR!")
+                else:
+                    await self._final_continue_button_click()
             
             # Извлечение результата
             result = await self._get_payment_result()
@@ -1310,14 +1319,36 @@ console.log('Proxy6 Auth Extension: Ready');
             # КРИТИЧЕСКОЕ: если капча не решена - СТОП
             raise Exception("FIRST CAPTCHA solve failed - payment process cannot continue")
         
+        # ДОБАВЛЕНО: Проверка QR страницы после успешного решения первой капчи
+        current_url_after_captcha = self._driver.current_url
+        if 'transferId=' in current_url_after_captcha and 'paymentSystemTransferNum=' in current_url_after_captcha:
+            logger.info("🎉 РАННИЙ УСПЕХ: QR страница обнаружена после Step 11 (первая капча)!")
+            logger.info(f"💾 ФИНАЛЬНЫЙ URL: {current_url_after_captcha}")
+            self.successful_qr_url = current_url_after_captcha
+            # Устанавливаем флаг для пропуска последующих шагов
+            self.early_qr_success = True
+        else:
+            self.early_qr_success = False
+        
         self.take_screenshot_conditional("fast_first_captcha_solved.png")
     
     async def _fast_handle_modal_with_second_captcha(self):
         """
         БЫСТРАЯ обработка модального окна с 10-секундным таймаутом
+        ОПТИМИЗИРОВАНО: при успешном QR завершение сценария
         """
         logger.info("🏃‍♂️ Step 12: FAST modal + SECOND CAPTCHA handling (10s timeout)")
         step12_start = time.time()
+        
+        # ПРОВЕРКА QR РАНЬШЕ - если уже на финальной странице, прекращаем поиск модалок
+        current_url = self._driver.current_url
+        if ('transferId=' in current_url and 'paymentSystemTransferNum=' in current_url):
+            logger.info("🎉 ОПТИМИЗАЦИЯ: Уже на странице с QR - пропускаем Step 12!")
+            logger.info(f"💾 СОХРАНЕН успешный URL для Step 14: {current_url}")
+            self.successful_qr_url = current_url
+            elapsed = time.time() - step12_start
+            logger.info(f"✅ Step 12 completed in {elapsed:.1f}s (QR page detected early)")
+            return
         
         # БЫСТРЫЙ поиск модального окна "Проверка данных" с 10-секундным лимитом
         modal_selectors = [
@@ -1764,14 +1795,27 @@ console.log('Proxy6 Auth Extension: Ready');
         return f"+7{random.randint(900, 999)}{random.randint(1000000, 9999999)}"
     
     async def _get_payment_result(self) -> Dict[str, Any]:
-        """СТРОГОЕ извлечение результата с валидацией"""
-        logger.info("🔍 STRICT result extraction with validation")
+        """СТРОГОЕ извлечение результата с валидацией
+        ОПТИМИЗИРОВАНО: использование сохраненного URL
+        """
+        logger.info("📍 Step 14: Extract payment result (QR code/URL)")
         
         await asyncio.sleep(2)  # Ожидание загрузки
-        self.take_screenshot_conditional("final_result_page.png")
         
         current_url = self._driver.current_url
-        logger.info(f"📍 Current URL: {current_url}")
+        logger.info(f"📍 Final URL: {current_url}")
+        
+        # ПРИОРИТЕТ: Используем ТЕКУЩИЙ финальный URL вместо сохраненного короткого
+        if 'transferId=' in current_url and 'paymentSystemTransferNum=' in current_url:
+            logger.info("🎉 УСПЕХ: Финальный URL содержит transferId и paymentSystemTransferNum!")
+        elif hasattr(self, 'successful_qr_url') and self.successful_qr_url and 'transferId=' in self.successful_qr_url:
+            logger.info(f"💾 Fallback: Используем сохраненный URL из Step 12: {self.successful_qr_url}")
+            current_url = self.successful_qr_url
+            logger.info("🎉 УСПЕХ: Сохраненный URL содержит transferId и paymentSystemTransferNum!")
+        else:
+            logger.warning("⚠️ Ни текущий, ни сохраненный URL не содержат QR параметры")
+        
+        self.take_screenshot_conditional("final_result_page.png")
         
         # СТРОГАЯ ПРОВЕРКА: мы должны быть НЕ на главной странице
         if current_url == self.base_url or current_url == f"{self.base_url}/":
@@ -1782,24 +1826,95 @@ console.log('Proxy6 Auth Extension: Ready');
                 'current_url': current_url
             }
         
-        # Быстрый поиск QR-кода
+        # УЛУЧШЕННЫЙ поиск QR-кода с расширенными селекторами
+        logger.info("🔍 Ищем QR код на странице...")
         qr_code_url = None
         qr_selectors = [
-            "//img[contains(@src, 'qr')]",
-            "//img[contains(@alt, 'QR')]",
+            # Приоритет 1: Canvas элементы (основной источник QR)
+            "//canvas",
             "//canvas[contains(@class, 'qr')]",
-            "//img[contains(@src, 'data:image') and contains(@src, 'qr')]",
-            "//*[contains(@class, 'qr-code')]//img"
+            "//canvas[contains(@id, 'qr')]",
+            
+            # Приоритет 2: Base64 изображения в data URI
+            "//img[starts-with(@src, 'data:image')]",
+            
+            # Приоритет 3: QR-специфичные селекторы
+            "//img[contains(@src, 'qr')]",
+            "//img[contains(@alt, 'qr')]", 
+            "//img[contains(@alt, 'QR')]",
+            "//img[contains(@class, 'qr')]",
+            "//img[contains(@id, 'qr')]",
+            
+            # Приоритет 4: Контейнеры с QR
+            "//*[contains(@class, 'qr')]//img",
+            "//*[contains(@class, 'qr')]//canvas",
+            "//*[contains(@class, 'qrcode')]//img",
+            "//*[contains(@class, 'qrcode')]//canvas",
+            "//*[contains(@id, 'qr')]//img",
+            "//*[contains(@id, 'qr')]//canvas",
+            
+            # Приоритет 5: Общие изображения
+            "//img[contains(@src, 'png')]",
+            "//img[contains(@src, 'jpg')]",
+            "//img[contains(@src, 'jpeg')]"
         ]
         
-        for selector in qr_selectors:
-            element = self.find_element_fast(By.XPATH, selector, timeout=2)
-            if element and element.is_displayed():
-                qr_url = element.get_attribute("src")
-                if qr_url and ('qr' in qr_url.lower() or 'data:image' in qr_url):
-                    qr_code_url = qr_url
-                    logger.info(f"✅ QR found: {qr_url[:50]}...")
-                    break
+        for i, selector in enumerate(qr_selectors, 1):
+            elements = self.find_elements_fast(By.XPATH, selector)
+            logger.info(f"🔍 Selector {i}: {selector} - найдено {len(elements)} элементов")
+            
+            for element in elements:
+                if not element.is_displayed():
+                    continue
+                    
+                # Для canvas получаем QR через JS
+                if element.tag_name == 'canvas':
+                    try:
+                        # Проверяем размер canvas (QR код должен быть не пустым)
+                        canvas_info = self._driver.execute_script("""
+                            var canvas = arguments[0];
+                            return {
+                                width: canvas.width,
+                                height: canvas.height,
+                                hasContent: canvas.width > 0 && canvas.height > 0
+                            };
+                        """, element)
+                        
+                        if canvas_info['hasContent'] and canvas_info['width'] >= 100:  # Минимальный размер QR
+                            canvas_data = self._driver.execute_script(
+                                "return arguments[0].toDataURL('image/png');", element
+                            )
+                            if canvas_data and canvas_data.startswith('data:image') and len(canvas_data) > 1000:  # Не пустое изображение
+                                qr_code_url = canvas_data
+                                logger.info(f"✅ QR код найден в CANVAS ({canvas_info['width']}x{canvas_info['height']}) и конвертирован в PNG!")
+                                break
+                        else:
+                            logger.debug(f"⚠️ Canvas слишком маленький: {canvas_info}")
+                    except Exception as e:
+                        logger.debug(f"⚠️ Canvas обработка ошибка: {e}")
+                        continue
+                        
+                # Для img получаем src
+                elif element.tag_name == 'img':
+                    qr_url = element.get_attribute("src")
+                    if qr_url:
+                        # ФИЛЬТРАЦИЯ неправильных SVG (исключаем декоративные иконки)
+                        if 'svg' in qr_url and ('sun.fd' in qr_url or 'icon' in qr_url or len(qr_url) < 100):
+                            logger.info(f"⚠️ Пропускаем декоративный SVG: {qr_url[:50]}...")
+                            continue
+                            
+                        # Принимаем только правильные QR коды
+                        if ('qr' in qr_url.lower() or 'data:image' in qr_url or 
+                            (qr_url.startswith('http') and len(qr_url) > 50)):
+                            qr_code_url = qr_url
+                            logger.info(f"✅ QR код найден в IMG: {qr_url[:50]}...")
+                            break
+            
+            if qr_code_url:
+                break
+                
+        if not qr_code_url:
+            logger.warning("⚠️ QR код не найден на странице")
         
         # Быстрый поиск ссылки на оплату
         payment_url = current_url  # Используем текущий URL как базовый
@@ -2173,7 +2288,17 @@ console.log('Proxy6 Auth Extension: Ready');
             return False
 
     async def _final_continue_button_click(self):
-        """Step 13: БЫСТРЫЙ клик по кнопке ПРОДОЛЖИТЬ без лишних задержек"""
+        """Step 13: БЫСТРЫЙ клик по кнопке ПРОДОЛЖИТЬ без лишних задержек
+        ОПТИМИЗИРОВАНО: пропуск при успешном QR
+        """
+        # ПРОВЕРКА QR РАНЬШЕ - если уже на финальной странице, пропускаем Step 13
+        current_url = self._driver.current_url
+        if ('transferId=' in current_url and 'paymentSystemTransferNum=' in current_url):
+            logger.info("🎉 ОПТИМИЗАЦИЯ: Уже на странице с QR - пропускаем Step 13!")
+            logger.info(f"💾 СОХРАНЕН успешный URL для Step 14: {current_url}")
+            self.successful_qr_url = current_url
+            return
+        
         logger.info("⚡ Step 13: FAST 'ПРОДОЛЖИТЬ' button click - NO delays!")
         
         # УБИРАЕМ скриншот для скорости (только в debug режиме)

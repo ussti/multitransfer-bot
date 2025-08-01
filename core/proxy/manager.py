@@ -10,9 +10,43 @@ import random
 import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-from .providers import Proxy6Provider
+from dataclasses import dataclass
+from enum import Enum
 from .validator import proxy_validator
 from .ssh_tunnel import SSHTunnelManager, ProxyCredentials
+
+# Proxy data structures (moved from providers.py)
+class ProxyVersion(Enum):
+    """Proxy version types"""
+    IPV4 = "4"
+    IPV4_SHARED = "3" 
+    IPV6 = "6"
+
+class ProxyType(Enum):
+    """Proxy protocol types"""
+    HTTP = "http"
+    SOCKS5 = "socks"
+
+@dataclass
+class ProxyInfo:
+    """Proxy information structure"""
+    id: str
+    ip: str
+    host: str
+    port: str
+    user: str
+    password: str
+    type: str
+    country: str
+    date: str
+    date_end: str
+    active: bool
+    
+    @property
+    def proxy_url(self) -> str:
+        """Get proxy URL in format protocol://user:pass@host:port"""
+        protocol = "socks5" if self.type == "socks" else "http"
+        return f"{protocol}://{self.user}:{self.password}@{self.host}:{self.port}"
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +65,7 @@ class ProxyManager:
         self.ssh_tunnel_manager = SSHTunnelManager()
         self.tunnel_enabled = config.get('proxy', {}).get('use_ssh_tunnel', True) if config else True
         
-        # Проверяем временное отключение прокси
-        proxy_disabled_file = "/tmp/proxy_disabled"
-        if os.path.exists(proxy_disabled_file):
-            self.enabled = False
-            logger.info("🌐 ProxyManager initialized in DISABLED mode (temporarily disabled)")
-            return
+        # Прокси управляются автоматически через конфигурацию
         
         proxy_config = config.get('proxy', {}) if config else {}
         
@@ -48,18 +77,18 @@ class ProxyManager:
             logger.info("🌐 ProxyManager initialized in direct mode (no proxy)")
     
     def _init_proxy6_only(self, proxy_config: Dict[str, Any]):
-        """Инициализация только Proxy6 провайдера"""
+        """Инициализация встроенной Proxy6 логики"""
         try:
-            proxy6_api_key = proxy_config.get('api_key', 'dummy_key')  # API ключ не нужен для статических прокси
-            
-            self.proxy6_provider = Proxy6Provider(proxy6_api_key)
+            self.api_key = proxy_config.get('api_key')
+            self.country = proxy_config.get('country', 'ru')
+            self.base_url = "https://px6.link/api"
             self.enabled = True
             
-            logger.info("✅ Proxy6-only manager initialized")
+            logger.info("✅ Built-in Proxy6 manager initialized")
             logger.info("🏆 Using Proxy6.net static proxies")
             
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Proxy6 provider: {e}")
+            logger.error(f"❌ Failed to initialize Proxy6 logic: {e}")
             self.enabled = False
     
     def _init_legacy_mode(self, proxy_config: Dict[str, Any]):
@@ -429,45 +458,6 @@ class ProxyManager:
         logger.info(f"🌐 Using legacy proxy: {proxy['ip']}:{proxy['port']} ({proxy['country']})")
         return proxy
 
-
-class LegacyProxyManager:
-    """Обертка для старого ProxyManager для использования в MultiProviderManager"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.proxy_manager = None
-        self._init_legacy_manager()
-    
-    def _init_legacy_manager(self):
-        """Инициализация старого менеджера"""
-        try:
-            # Создаем старый ProxyManager с legacy режимом
-            legacy_config = self.config.copy()
-            legacy_config['proxy']['multi_provider'] = False  # Отключаем мульти-провайдер
-            
-            self.proxy_manager = ProxyManager(legacy_config)
-            logger.info("✅ Legacy Proxy6 manager initialized for fallback")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize legacy manager: {e}")
-    
-    async def get_proxy(self) -> Optional[Dict[str, Any]]:
-        """Получить прокси через legacy менеджер"""
-        if not self.proxy_manager:
-            return None
-        
-        try:
-            proxy = await self.proxy_manager._get_legacy_proxy()
-            if proxy:
-                proxy['provider'] = 'proxy6'
-            return proxy
-        except Exception as e:
-            logger.error(f"❌ Legacy proxy manager failed: {e}")
-            return None
-    
-    async def mark_proxy_failed(self, ip: str, port: str):
-        """Отметить прокси как проблемный"""
-        if self.proxy_manager:
-            await self.proxy_manager.mark_proxy_failed(ip, port)
 
 
 # Для обратной совместимости создаем простую функцию
