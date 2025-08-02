@@ -832,21 +832,21 @@ class PaymentService:
                     # КРИТИЧЕСКАЯ ПРОВЕРКА: После решения CAPTCHA может появиться модальное окно "Проверка данных"
                     logger.info("🚨 MONITORING: Checking for 'Проверка данных' modal after CAPTCHA")
                     
-                    # Быстрая проверка 2 секунды после решения капчи (как в legacy)
-                    for attempt in range(2):
-                        modal_detected = await self._monitor_verification_modal(browser_manager.driver)
+                    # ОПТИМИЗИРОВАНО: Агрессивная проверка 10 секунд после решения капчи
+                    logger.info("🔄 АГРЕССИВНАЯ проверка модальных окон после CAPTCHA (10 сек)")
+                    for attempt in range(20):  # 20 попыток по 0.5 секунды = 10 секунд
+                        modal_detected = await self._handle_all_modals(browser_manager.driver)
                         if modal_detected:
-                            logger.info("🚨 URGENT: Modal detected after CAPTCHA - handling immediately")
-                            modal_handled = await self._handle_verification_modal(browser_manager.driver)
-                            if modal_handled:
-                                logger.info("✅ Modal handled successfully after CAPTCHA")
-                                # НЕ ВОЗВРАЩАЕМСЯ СРАЗУ - продолжаем выполнение до шага 13!
-                                logger.info("🔄 Continuing to step 13 after modal handling...")
-                            else:
-                                logger.error("❌ Modal handling failed after CAPTCHA")
-                                raise Exception("Modal handling failed - payment process cannot continue")
+                            logger.info("🚨 URGENT: Modal detected after CAPTCHA - handled successfully")
+                            logger.info("✅ Modal handled successfully after CAPTCHA")
+                            # НЕ ВОЗВРАЩАЕМСЯ СРАЗУ - продолжаем выполнение до шага 13!
+                            logger.info("🔄 Continuing to step 13 after modal handling...")
                             break
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
+                        
+                        # Логируем каждые 2 секунды для не засорения логов
+                        if attempt % 4 == 3:
+                            logger.debug(f"⏳ Проверка модальных окон: {(attempt + 1) * 0.5:.1f}/10.0 сек")
                     
                     logger.info("✅ MONITORING: Modal check completed after CAPTCHA")
                     
@@ -1116,6 +1116,38 @@ class PaymentService:
                             if position_x < 800:  # Левее - это модальная кнопка
                                 logger.info(f"🎯 ОТЛИЧНО: Позиция кнопки x={position_x} - это МОДАЛЬНАЯ кнопка!")
                                 is_modal_button = True
+                                
+                                # ИСПРАВЛЕНИЕ ПРОБЛЕМЫ: Если кнопка disabled или перекрыта - попробуем исправить
+                                if 'disabled' in button.get_attribute('class').lower() or not button.is_enabled():
+                                    logger.warning("⚠️ Кнопка ПРОДОЛЖИТЬ неактивна (disabled), попробуем активировать")
+                                    try:
+                                        # Убираем disabled атрибут
+                                        driver.execute_script("arguments[0].removeAttribute('disabled');", button)
+                                        driver.execute_script("arguments[0].classList.remove('Mui-disabled');", button)
+                                        # Делаем кнопку активной
+                                        driver.execute_script("arguments[0].style.pointerEvents = 'auto';", button)
+                                        driver.execute_script("arguments[0].style.opacity = '1';", button)
+                                        logger.info("✅ Кнопка ПРОДОЛЖИТЬ активирована")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Не удалось активировать кнопку: {e}")
+                                
+                                # Убираем перекрывающие элементы
+                                try:
+                                    overlay_selectors = [
+                                        "div.css-tsxass",
+                                        "[class*='css-tsxass']",
+                                        "[class*='overlay']",
+                                        "[class*='backdrop']"
+                                    ]
+                                    for overlay_selector in overlay_selectors:
+                                        overlays = driver.find_elements(By.CSS_SELECTOR, overlay_selector)
+                                        for overlay in overlays:
+                                            if overlay.is_displayed():
+                                                driver.execute_script("arguments[0].style.display = 'none';", overlay)
+                                                logger.info(f"✅ Скрыт перекрывающий элемент: {overlay_selector}")
+                                except Exception as e:
+                                    logger.debug(f"⚠️ Ошибка при удалении overlay: {e}")
+                                    
                             else:
                                 logger.warning(f"⚠️ НЕПРАВИЛЬНО: Позиция x={position_x} - это кнопка на ФОРМЕ, пропускаем")
                                 continue  # Пропускаем кнопку на форме
@@ -1141,7 +1173,19 @@ class PaymentService:
                             logger.info("✅ КЛИК: Обычный клик выполнен")
                             # Увеличиваем задержку для полной загрузки QR страницы
                             logger.info("⏳ Ожидание загрузки QR страницы...")
-                            await asyncio.sleep(5)  # Увеличиваем до 5 секунд
+                            
+                            # ОПТИМИЗИРОВАНО: Более частая проверка модальных окон (каждые 2 сек вместо 5)
+                            for wait_attempt in range(10):  # 10 попыток по 0.5 секунды = 5 секунд общего времени
+                                await asyncio.sleep(0.5)
+                                
+                                # Проверяем модальные окна каждые 0.5 секунды для быстрого обнаружения
+                                modal_detected = await self._handle_all_modals(driver)
+                                if modal_detected:
+                                    logger.info("🚨 КРИТИЧНО: Модальное окно обнаружено во время ожидания QR страницы!")
+                                    # Продолжаем ожидание после обработки модального окна
+                                    continue
+                                
+                                logger.debug(f"⏳ БЫСТРАЯ проверка QR страницы: {(wait_attempt + 1) * 0.5:.1f}/5.0 секунд")
                             
                             # Проверяем состояние страницы после клика
                             success_detected = False
@@ -1865,3 +1909,341 @@ class PaymentService:
             }
             for payment in payments
         ]
+
+    async def _monitor_error_modal(self, driver) -> bool:
+        """Быстрая проверка наличия модального окна 'Ошибка' с кнопкой 'ЗАКРЫТЬ'"""
+        try:
+            error_modal_selectors = [
+                "//div[contains(text(), 'Ошибка')]",
+                "//*[contains(text(), 'Ошибка')]",
+                "//h1[contains(text(), 'Ошибка')]",
+                "//h2[contains(text(), 'Ошибка')]",
+                "//h3[contains(text(), 'Ошибка')]"
+            ]
+            
+            for selector in error_modal_selectors:
+                try:
+                    element = driver.find_element(By.XPATH, selector)
+                    if element and element.is_displayed():
+                        logger.warning("🚨 URGENT: 'Ошибка' modal detected!")
+                        return True
+                except:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error modal monitoring error: {e}")
+            return False
+
+    async def _diagnostic_error_button_click_legacy(self, driver) -> bool:
+        """ОБРАБОТКА модального окна 'Ошибка' по логике 'Проверка данных' - синяя кнопка 'ЗАКРЫТЬ'"""
+        try:
+            logger.info("🏃‍♂️ FAST: Error modal handling - searching for blue 'ЗАКРЫТЬ' button")
+            
+            await asyncio.sleep(0.5)  # Минимальное ожидание модального окна
+            
+            # ОПТИМИЗИРОВАННЫЕ СЕЛЕКТОРЫ: Работающие селекторы в приоритете
+            error_modal_button_selectors = [
+                # 🎯 ПРИОРИТЕТ 1: РАБОТАЮЩИЙ СЕЛЕКТОР из успешных логов
+                "//button[contains(text(), 'Закрыть')]",  # ✅ СРАБОТАЛ в логах
+                
+                # 🎯 ПРИОРИТЕТ 2: Вариации работающего селектора
+                "//button[contains(text(), 'ЗАКРЫТЬ')]",
+                "//button[text()='ЗАКРЫТЬ']",
+                "//button[text()='Закрыть']",
+                
+                # 🎯 ПРИОРИТЕТ 3: По координатам X=623 (как в успешных логах)
+                "//button[contains(text(), 'ЗАКРЫТЬ') and contains(@style, 'rgb(0, 124, 255)')]",
+                "//button[contains(text(), 'Закрыть') and contains(@style, 'rgb(0, 124, 255)')]",
+                
+                # ПРИОРИТЕТ 4: Прямой поиск синей кнопки ЗАКРЫТЬ 
+                "//button[contains(text(), 'ЗАКРЫТЬ') and contains(@class, 'MuiButton')]",
+                "//button[contains(text(), 'Закрыть') and contains(@class, 'MuiButton')]",
+                
+                # ПРИОРИТЕТ 5: Кнопка внутри модального контейнера
+                "//div[@role='presentation']//button[contains(text(), 'ЗАКРЫТЬ')]",
+                "//div[@role='presentation']//button[contains(text(), 'Закрыть')]",
+                "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'ЗАКРЫТЬ')]",
+                "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'Закрыть')]",
+                
+                # ПРИОРИТЕТ 6: В модальном окне с заголовком "Ошибка"
+                "//h2[contains(text(), 'Ошибка')]/following-sibling::*//button[contains(text(), 'ЗАКРЫТЬ')]",
+                "//div[contains(text(), 'Ошибка')]/following-sibling::*//button[contains(text(), 'ЗАКРЫТЬ')]",
+                
+                # FALLBACK: Любая кнопка закрытия
+                "//button[contains(text(), 'закрыть')]",
+                "//button[contains(@class, 'close')]",
+                "//*[@role='button' and contains(text(), 'ЗАКРЫТЬ')]"
+            ]
+            
+            for selector in error_modal_button_selectors:
+                try:
+                    button = driver.find_element(By.XPATH, selector)
+                    if button and button.is_displayed():
+                        # Проверяем что это действительно кнопка закрытия модального окна
+                        button_text = button.text.strip() if hasattr(button, 'text') else ''
+                        button_html = button.get_attribute('outerHTML')[:100] if button else ''
+                        
+                        logger.info(f"🎯 Found potential ЗАКРЫТЬ button: '{button_text}' | HTML: {button_html}")
+                        
+                        # Проверяем что кнопка содержит нужный текст
+                        if any(text.lower() in button_text.lower() for text in ['закрыть', 'close']) or 'ЗАКРЫТЬ' in button_text:
+                            logger.info(f"✅ CONFIRMED: Valid ЗАКРЫТЬ button found with selector: {selector}")
+                            
+                            # Получаем информацию о кнопке для диагностики
+                            try:
+                                rect = button.rect
+                                styles = driver.execute_script("""
+                                    var element = arguments[0];
+                                    var style = window.getComputedStyle(element);
+                                    return {
+                                        backgroundColor: style.backgroundColor,
+                                        color: style.color,
+                                        display: style.display,
+                                        visibility: style.visibility,
+                                        opacity: style.opacity,
+                                        zIndex: style.zIndex
+                                    };
+                                """, button)
+                                logger.info(f"🎯 Кнопка ЗАКРЫТЬ: позиция={rect}, стили={styles}")
+                            except:
+                                pass
+                            
+                            # МНОГОСТУПЕНЧАТЫЙ КЛИК для максимальной надежности
+                            click_methods = [
+                                ("Normal click", lambda: button.click()),
+                                ("JavaScript click", lambda: driver.execute_script("arguments[0].click();", button)),
+                                ("ActionChains click", lambda: self._action_chains_click(driver, button)),
+                                ("Coordinate click", lambda: self._coordinate_click(driver, button)),
+                                ("Focus + Enter", lambda: self._focus_and_enter_click(driver, button))
+                            ]
+                            
+                            for method_name, click_method in click_methods:
+                                try:
+                                    logger.info(f"🎯 Пробуем метод: {method_name}")
+                                    
+                                    # Прокручиваем к кнопке перед каждой попыткой
+                                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", button)
+                                    await asyncio.sleep(0.5)
+                                    
+                                    click_method()
+                                    logger.info(f"✅ {method_name} выполнен успешно")
+                                    
+                                    # Проверяем исчезло ли модальное окно
+                                    await asyncio.sleep(1)
+                                    if not await self._monitor_error_modal(driver):
+                                        logger.info("✅ Error modal closed successfully!")
+                                        return True
+                                    else:
+                                        logger.warning(f"⚠️ {method_name} не закрыл модальное окно, пробуем следующий метод")
+                                        
+                                except Exception as click_error:
+                                    logger.warning(f"⚠️ {method_name} failed: {click_error}")
+                                    continue
+                            
+                            # Если все методы не сработали
+                            logger.warning("⚠️ All click methods failed for ЗАКРЫТЬ button")
+                            return False
+                        else:
+                            logger.debug(f"⚠️ Button text doesn't match: '{button_text}'")
+                            
+                except Exception as e:
+                    logger.debug(f"⚠️ Selector failed: {selector} | Error: {e}")
+                    continue
+            
+            logger.warning("⚠️ Could not find or click 'ЗАКРЫТЬ' button in error modal")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling error modal: {e}")
+            return False
+
+    async def _handle_all_modals(self, driver) -> bool:
+        """Универсальная обработка всех типов модальных окон по LEGACY логике с последующим кликом по основной кнопке ПРОДОЛЖИТЬ"""
+        try:
+            modal_handled = False
+            
+            # Проверяем и обрабатываем модальное окно "Ошибка" по той же логике что "Проверка данных"
+            if await self._monitor_error_modal(driver):
+                logger.info("🚨 HANDLING: 'Ошибка' modal found - using LEGACY logic for blue 'ЗАКРЫТЬ' button")
+                error_handled = await self._diagnostic_error_button_click_legacy(driver)
+                if error_handled:
+                    logger.info("✅ Error modal handled successfully using LEGACY logic")
+                    modal_handled = True
+                else:
+                    logger.warning("⚠️ Error modal handling failed")
+            
+            # Проверяем и обрабатываем модальное окно "Проверка данных" 
+            if await self._monitor_verification_modal(driver):
+                logger.info("🚨 HANDLING: 'Проверка данных' modal found - using LEGACY logic")
+                verification_handled = await self._diagnostic_button_click_legacy(driver)
+                if verification_handled:
+                    logger.info("✅ Verification modal handled successfully using LEGACY logic")
+                    modal_handled = True
+                else:
+                    logger.warning("⚠️ Verification modal handling failed")
+            
+            # 🎯 КРИТИЧЕСКИЙ НОВЫЙ ШАГ: После закрытия всех модальных окон кликаем по ОСНОВНОЙ кнопке ПРОДОЛЖИТЬ на странице
+            if modal_handled:
+                logger.info("🎯 НОВЫЙ ШАГ: Все модальные окна закрыты - ищем основную кнопку ПРОДОЛЖИТЬ на странице")
+                await asyncio.sleep(1)  # Короткая пауза после закрытия модальных окон
+                
+                main_continue_clicked = await self._click_main_continue_button(driver)
+                if main_continue_clicked:
+                    logger.info("✅ УСПЕХ: Основная кнопка ПРОДОЛЖИТЬ на странице нажата!")
+                    
+                    # 🚨 КРИТИЧНО: После клика по основной кнопке МОГУТ появиться новые модальные окна и капча!
+                    logger.info("🔄 МОНИТОРИНГ: Проверяем новые модальные окна/капчи после клика основной кнопки ПРОДОЛЖИТЬ...")
+                    
+                    # Циклический мониторинг в течение 60 секунд (как в логах)
+                    for monitor_attempt in range(30):  # 30 попыток по 2 секунды = 60 секунд
+                        await asyncio.sleep(2)
+                        
+                        # Проверяем капчу (может появиться снова)
+                        try:
+                            captcha_elements = driver.find_elements(By.XPATH, "//iframe[contains(@src, 'recaptcha')]")
+                            if captcha_elements and any(elem.is_displayed() for elem in captcha_elements):
+                                logger.info("🚨 КАПЧА обнаружена после клика основной кнопки!")
+                                # Капча будет обработана в основном цикле
+                                return True
+                        except:
+                            pass
+                        
+                        # Проверяем новые модальные окна
+                        new_modal_detected = await self._monitor_verification_modal(driver) or await self._monitor_error_modal(driver)
+                        if new_modal_detected:
+                            logger.info("🚨 НОВОЕ МОДАЛЬНОЕ ОКНО обнаружено после клика основной кнопки!")
+                            # Новые модальные окна будут обработаны в основном цикле
+                            return True
+                        
+                        # Проверяем успешный переход на QR страницу
+                        current_url = driver.current_url
+                        if 'transferId=' in current_url and 'paymentSystemTransferNum=' in current_url:
+                            logger.info("🎉 ФИНАЛЬНЫЙ УСПЕХ: Переход на QR страницу выполнен!")
+                            return True
+                        
+                        logger.debug(f"⏳ Мониторинг: {(monitor_attempt + 1) * 2}/60 секунд...")
+                    
+                    logger.info("⏰ МОНИТОРИНГ завершен: 60 секунд наблюдения выполнено")
+                    return True
+                else:
+                    logger.warning("⚠️ ПРОБЛЕМА: Не удалось найти или нажать основную кнопку ПРОДОЛЖИТЬ")
+                    return False
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error in universal modal handler: {e}")
+            return False
+
+    async def _click_main_continue_button(self, driver) -> bool:
+        """Поиск и клик по ОСНОВНОЙ кнопке ПРОДОЛЖИТЬ на странице (синяя кнопка справа)"""
+        try:
+            logger.info("🔍 Поиск основной синей кнопки ПРОДОЛЖИТЬ на странице...")
+            
+            # Селекторы для поиска основной кнопки ПРОДОЛЖИТЬ (исключая модальные окна)
+            main_continue_selectors = [
+                # ПРИОРИТЕТ 1: Основная кнопка ПРОДОЛЖИТЬ (не в модальных окнах)  
+                "//button[contains(text(), 'ПРОДОЛЖИТЬ') and not(ancestor::div[@role='presentation'])]",
+                "//button[contains(text(), 'Продолжить') and not(ancestor::div[@role='presentation'])]",
+                "//button[contains(text(), 'ПРОДОЛЖИТЬ') and not(ancestor::div[contains(@class, 'MuiModal')])]",
+                
+                # ПРИОРИТЕТ 2: Кнопки на основной форме
+                "//form//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+                "//div[not(@role='presentation')]//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+                
+                # ПРИОРИТЕТ 3: Любые синие кнопки ПРОДОЛЖИТЬ (с проверкой координат)
+                "//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+                "//button[contains(text(), 'Продолжить')]",
+            ]
+            
+            for selector in main_continue_selectors:
+                try:
+                    from selenium.webdriver.support.ui import WebDriverWait
+                    from selenium.webdriver.support import expected_conditions as EC
+                    from selenium.webdriver.common.by import By
+                    
+                    buttons = WebDriverWait(driver, 3).until(
+                        EC.presence_of_all_elements_located((By.XPATH, selector))
+                    )
+                    
+                    if not buttons:
+                        continue
+                        
+                    for button in buttons:
+                        if not button.is_displayed() or not button.is_enabled():
+                            continue
+                            
+                        # Получаем координаты и проверяем что это НЕ модальная кнопка
+                        try:
+                            location = button.location
+                            x_coord = location.get('x', 0)
+                            button_text = button.text.strip()
+                            
+                            logger.info(f"🎯 Найдена кнопка '{button_text}' с координатами x={x_coord}")
+                            
+                            # Основные кнопки обычно x > 800 (модальные x ≈ 623)
+                            # Из скриншота видно, что кнопка ПРОДОЛЖИТЬ находится справа
+                            if x_coord > 800:
+                                logger.info(f"✅ ПОДТВЕРЖДЕНО: Кнопка x={x_coord} > 800 - это ОСНОВНАЯ кнопка со скриншота!")
+                                
+                                # Проверяем цвет кнопки (должна быть синей)
+                                try:
+                                    bg_color = button.value_of_css_property('background-color')
+                                    if 'rgb(0, 124, 255)' in bg_color or 'blue' in bg_color or 'rgb(13, 110, 253)' in bg_color:
+                                        logger.info(f"✅ ЦВЕТ: Синяя кнопка {bg_color} - точно как на скриншоте!")
+                                    else:
+                                        logger.info(f"ℹ️ ЦВЕТ: {bg_color} - не синий, но позиция соответствует скриншоту")
+                                except:
+                                    pass
+                                
+                                # Скроллим к кнопке и кликаем
+                                driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                                await asyncio.sleep(0.5)
+                                
+                                # Клик по основной кнопке ПРОДОЛЖИТЬ
+                                button.click()
+                                logger.info(f"✅ КЛИК: Основная синяя кнопка ПРОДОЛЖИТЬ нажата! (x={x_coord}) - как на скриншоте")
+                                
+                                # Даем время на обработку клика и возможное появление новых модальных окон/капчи
+                                await asyncio.sleep(1)
+                                return True
+                                
+                            else:
+                                logger.debug(f"⚠️ Пропускаем кнопку x={x_coord} ≤ 800 - это модальная кнопка, не основная")
+                                continue
+                                
+                        except Exception as e:
+                            logger.debug(f"⚠️ Не удалось получить координаты кнопки: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"⚠️ Селектор не сработал: {selector} | Ошибка: {e}")
+                    continue
+            
+            logger.warning("⚠️ Основная синяя кнопка ПРОДОЛЖИТЬ не найдена на странице")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при поиске основной кнопки ПРОДОЛЖИТЬ: {e}")
+            return False
+
+    def _action_chains_click(self, driver, element):
+        """Клик через ActionChains"""
+        from selenium.webdriver.common.action_chains import ActionChains
+        ActionChains(driver).move_to_element(element).click().perform()
+
+    def _coordinate_click(self, driver, element):
+        """Клик по координатам элемента"""
+        from selenium.webdriver.common.action_chains import ActionChains
+        rect = element.rect
+        x = rect["x"] + rect["width"] // 2
+        y = rect["y"] + rect["height"] // 2
+        ActionChains(driver).move_by_offset(x, y).click().perform()
+
+    def _focus_and_enter_click(self, driver, element):
+        """Фокус на элемент и нажатие Enter"""
+        from selenium.webdriver.common.keys import Keys
+        element.send_keys("")  # Фокусируемся на элементе
+        element.send_keys(Keys.ENTER)

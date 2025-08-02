@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 import json
 from typing import Dict, Any, Optional
+from collections import defaultdict
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -37,6 +38,15 @@ class MultiTransferAutomation:
         # Оптимизированные настройки для скорости
         self.screenshot_enabled = config.get('development', {}).get('screenshots_enabled', False)
         self.fast_mode = config.get('multitransfer', {}).get('fast_mode', True)
+        
+        # ⚡ МЕТРИКИ ПРОИЗВОДИТЕЛЬНОСТИ
+        self.performance_metrics = {
+            'step_times': defaultdict(list),
+            'total_time': 0,
+            'modal_handling_time': 0,
+            'captcha_time': 0,
+            'form_filling_time': 0
+        }
         
         # ОПТИМИЗИРОВАННЫЕ селекторы - только самые быстрые
         self.selectors = {
@@ -293,7 +303,16 @@ class MultiTransferAutomation:
     # ОПТИМИЗИРОВАННЫЕ вспомогательные методы
     
     def find_element_fast(self, by, selector, timeout=2):
-        """Быстрый поиск элемента (2 сек вместо 5)"""
+        """⚡ ОПТИМИЗИРОВАННЫЙ поиск элемента (2 сек вместо 5)"""
+        try:
+            # ⚡ ОПТИМИЗАЦИЯ: Сначала пробуем найти сразу без ожидания
+            element = self._driver.find_element(by, selector)
+            if element:
+                return element
+        except:
+            pass
+        
+        # Если не нашли сразу, используем WebDriverWait
         try:
             element = WebDriverWait(self._driver, timeout).until(
                 EC.presence_of_element_located((by, selector))
@@ -364,25 +383,241 @@ class MultiTransferAutomation:
             return False
     
     async def handle_verification_modal_if_present(self):
-        """Обработка модального окна 'Проверка данных' если оно обнаружено"""
+        """Обработка модального окна 'Проверка данных' с валидацией успешности"""
         try:
             modal_detected = await self.monitor_verification_modal()
             if modal_detected:
-                logger.info("🚨 HANDLING: 'Проверка данных' modal found - processing immediately")
+                logger.info("🚨 STABILIZED: 'Проверка данных' modal found - processing with validation")
                 
-                # Делаем скриншот
-                self.take_screenshot_conditional("urgent_modal_detected.png")
+                # Делаем скриншот до обработки
+                self.take_screenshot_conditional("verification_modal_before.png")
                 
-                # Вызываем полную обработку модального окна
-                await self._fast_handle_modal_with_second_captcha()
+                # Вызываем обработку модального окна
+                success = await self._fast_handle_modal_with_second_captcha()
                 
-                logger.info("✅ HANDLED: 'Проверка данных' modal processed")
-                return True
+                # ✅ ВАЛИДАЦИЯ УСПЕШНОСТИ: Проверяем что модальное окно закрылось
+                await asyncio.sleep(1)
+                modal_still_present = await self.monitor_verification_modal()
+                
+                if not modal_still_present:
+                    self.take_screenshot_conditional("verification_modal_success.png")
+                    logger.info("✅ VALIDATED: 'Проверка данных' modal successfully closed")
+                    return True
+                else:
+                    self.take_screenshot_conditional("verification_modal_failed.png")
+                    logger.warning("⚠️ VALIDATION FAILED: Modal still present after processing")
+                    return False
             
             return False
             
         except Exception as e:
-            logger.error(f"❌ Error handling verification modal: {e}")
+            logger.error(f"❌ Error in stabilized verification modal handler: {e}")
+            # 🔄 ERROR RECOVERY для verification modal
+            try:
+                logger.info("🔄 ERROR RECOVERY: Checking verification modal state")
+                current_url = self._driver.current_url
+                if 'transferId=' in current_url and 'paymentSystemTransferNum=' in current_url:
+                    logger.info("✅ ERROR RECOVERY: Already on QR page - verification modal was handled")
+                    return True
+                else:
+                    logger.warning("⚠️ ERROR RECOVERY: Not on QR page - verification modal failed")
+                    return False
+            except Exception as recovery_error:
+                logger.error(f"❌ ERROR RECOVERY failed: {recovery_error}")
+                return False
+
+    async def monitor_error_modal(self):
+        """МОНИТОРИНГ модального окна 'Ошибка' с кнопкой 'ЗАКРЫТЬ' - может появиться в любой момент"""
+        try:
+            # Селекторы для поиска модального окна "Ошибка"
+            error_modal_selectors = [
+                "//div[contains(text(), 'Ошибка')]",
+                "//*[contains(text(), 'Ошибка')]",
+                "//h1[contains(text(), 'Ошибка')]",
+                "//h2[contains(text(), 'Ошибка')]",
+                "//h3[contains(text(), 'Ошибка')]"
+            ]
+            
+            for selector in error_modal_selectors:
+                try:
+                    element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                    if element and element.is_displayed():
+                        logger.warning("🚨 URGENT: 'Ошибка' modal detected during operation!")
+                        return True
+                except:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error modal monitoring error: {e}")
+            return False
+
+    async def handle_error_modal_if_present(self):
+        """Обработка модального окна 'Ошибка' по логике 'Проверка данных' - синяя кнопка 'ЗАКРЫТЬ'"""
+        try:
+            modal_detected = await self.monitor_error_modal()
+            if modal_detected:
+                logger.info("🚨 HANDLING: 'Ошибка' modal found - using LEGACY logic for blue 'ЗАКРЫТЬ' button")
+                
+                # Делаем скриншот
+                self.take_screenshot_conditional("error_modal_detected.png")
+                
+                await asyncio.sleep(0.2)  # Оптимизированное ожидание модального окна
+                
+                # ОПТИМИЗИРОВАННЫЕ СЕЛЕКТОРЫ: Работающие селекторы в приоритете
+                error_modal_button_selectors = [
+                    # 🎯 ПРИОРИТЕТ 1: РАБОТАЮЩИЙ СЕЛЕКТОР из успешных логов
+                    "//button[contains(text(), 'Закрыть')]",  # ✅ СРАБОТАЛ в логах
+                    
+                    # 🎯 ПРИОРИТЕТ 2: Вариации работающего селектора
+                    "//button[contains(text(), 'ЗАКРЫТЬ')]",
+                    "//button[text()='ЗАКРЫТЬ']",
+                    "//button[text()='Закрыть']",
+                    
+                    # 🎯 ПРИОРИТЕТ 3: По координатам X=623 и цвету (как в успешных логах)
+                    "//button[contains(text(), 'ЗАКРЫТЬ') and contains(@style, 'rgb(0, 124, 255)')]",
+                    "//button[contains(text(), 'Закрыть') and contains(@style, 'rgb(0, 124, 255)')]",
+                    
+                    # ПРИОРИТЕТ 4: Прямой поиск синей кнопки MUI
+                    "//button[contains(text(), 'ЗАКРЫТЬ') and contains(@class, 'MuiButton')]",
+                    "//button[contains(text(), 'Закрыть') and contains(@class, 'MuiButton')]",
+                    
+                    # ПРИОРИТЕТ 5: Кнопка внутри модального контейнера
+                    "//div[@role='presentation']//button[contains(text(), 'ЗАКРЫТЬ')]",
+                    "//div[@role='presentation']//button[contains(text(), 'Закрыть')]",
+                    "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'ЗАКРЫТЬ')]",
+                    "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'Закрыть')]",
+                    
+                    # FALLBACK: Любая кнопка закрытия
+                    "//button[contains(text(), 'закрыть')]",
+                    "//button[contains(@class, 'close')]",
+                    "//button[contains(@aria-label, 'close')]"
+                ]
+                
+                button_clicked = False
+                for selector in error_modal_button_selectors:
+                    try:
+                        button = self.find_element_fast(By.XPATH, selector, timeout=2)
+                        if button and button.is_displayed():
+                            # Проверяем что это действительно кнопка закрытия модального окна
+                            button_text = button.text.strip() if hasattr(button, 'text') else ''
+                            button_location = button.location
+                            
+                            logger.info(f"🎯 Found potential ЗАКРЫТЬ button: '{button_text}' at x={button_location.get('x', 0)}")
+                            
+                            # Позиционная проверка: модальные кнопки обычно x < 800 (как в логах: x=623)
+                            x_coord = button_location.get('x', 0)
+                            is_modal_position = x_coord < 800
+                            
+                            # Проверяем что кнопка содержит нужный текст и находится в правильной позиции
+                            if any(text.lower() in button_text.lower() for text in ['закрыть', 'close']) and is_modal_position:
+                                logger.info(f"✅ CONFIRMED: Valid ЗАКРЫТЬ button found with selector: {selector}, position: x={x_coord}")
+                                
+                                # Прокручиваем к кнопке
+                                self._driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                                await asyncio.sleep(0.1)
+                                
+                                if self.click_element_fast(button):
+                                    logger.info("✅ ЗАКРЫТЬ button clicked successfully")
+                                    button_clicked = True
+                                    break
+                            else:
+                                logger.debug(f"⚠️ Button doesn't match: text='{button_text}', modal_position={is_modal_position}, x={x_coord}")
+                                
+                    except Exception as e:
+                        logger.debug(f"⚠️ Selector failed: {selector} | Error: {e}")
+                        continue
+                
+                # FALLBACK: Поиск по координатам X=623 (как в успешных логах)
+                if not button_clicked:
+                    logger.info("🎯 FALLBACK: Поиск кнопки по координатам x=623")
+                    try:
+                        coordinate_script = """
+                        var buttons = document.querySelectorAll('button');
+                        for (var i = 0; i < buttons.length; i++) {
+                            var btn = buttons[i];
+                            var rect = btn.getBoundingClientRect();
+                            var text = btn.textContent || btn.innerText || '';
+                            // Поиск кнопки с x=623 (±50 пикселей) и текстом "Закрыть"
+                            if (Math.abs(rect.left - 623) < 50 && text.toLowerCase().includes('закрыть')) {
+                                return {found: true, element: btn, x: rect.left, text: text};
+                            }
+                        }
+                        return {found: false};
+                        """
+                        result = self._driver.execute_script(coordinate_script)
+                        if result and result.get('found'):
+                            logger.info(f"✅ COORDINATE FALLBACK: Found button at x={result.get('x')}: '{result.get('text')}'")
+                            element = result.get('element')
+                            if element and self.click_element_fast(element):
+                                logger.info("✅ COORDINATE button clicked successfully")
+                                button_clicked = True
+                    except Exception as e:
+                        logger.debug(f"⚠️ Coordinate fallback failed: {e}")
+                
+                if button_clicked:
+                    # ✅ ВАЛИДАЦИЯ УСПЕШНОСТИ: Проверяем что модальное окно закрылось
+                    await asyncio.sleep(0.5)
+                    error_modal_still_present = await self.monitor_error_modal()
+                    
+                    if not error_modal_still_present:
+                        self.take_screenshot_conditional("error_modal_success.png")
+                        logger.info("✅ VALIDATED: 'Ошибка' modal successfully closed with optimized selectors")
+                        return True
+                    else:
+                        self.take_screenshot_conditional("error_modal_validation_failed.png")
+                        logger.warning("⚠️ VALIDATION FAILED: Error modal still present after click")
+                        return False
+                else:
+                    logger.warning("⚠️ Could not find or click 'ЗАКРЫТЬ' button in error modal (all methods failed)")
+                    return False
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling error modal: {e}")
+            return False
+
+    async def handle_all_modals_if_present(self, max_retries=2):
+        """Универсальная обработка всех типов модальных окон с retry логикой"""
+        modal_start = time.time()
+        try:
+            # 🔄 RETRY ЛОГИКА: Повторяем попытки обнаружения модальных окон
+            for retry_attempt in range(max_retries):
+                if retry_attempt > 0:
+                    logger.info(f"🔄 RETRY ATTEMPT {retry_attempt + 1}/{max_retries}: Checking for modals again")
+                    await asyncio.sleep(0.2)  # Оптимальная пауза перед повторной попыткой
+                
+                # ✅ ПРАВИЛЬНАЯ ПОСЛЕДОВАТЕЛЬНОСТЬ (как в успешных логах): 
+                # 1. CAPTCHA солвинг (в другом методе)
+                # 2. Проверка данных (60 сек после CAPTCHA)
+                # 3. Ошибка (11 сек после Проверка данных)
+                
+                # 🎯 ПРИОРИТЕТ 1: Модальное окно "Проверка данных" (появляется первым)
+                verification_handled = await self.handle_verification_modal_if_present()
+                if verification_handled:
+                    logger.info("✅ SEQUENCE: 'Проверка данных' modal handled successfully")
+                    return True
+                
+                # 🎯 ПРИОРИТЕТ 2: Модальное окно "Ошибка" (появляется вторым)
+                error_handled = await self.handle_error_modal_if_present()
+                if error_handled:
+                    logger.info("✅ SEQUENCE: 'Ошибка' modal handled successfully")
+                    return True
+                
+                # Если ничего не найдено на этой попытке, продолжаем
+                if retry_attempt < max_retries - 1:
+                    logger.debug(f"⏳ No modals found on attempt {retry_attempt + 1}, retrying...")
+                    continue
+            
+            # Ничего не найдено после всех попыток
+            self.performance_metrics['modal_handling_time'] += time.time() - modal_start
+            return False
+            
+        except Exception as e:
+            self.performance_metrics['modal_handling_time'] += time.time() - modal_start
+            logger.error(f"❌ Error in stabilized modal handler: {e}")
             return False
 
     
@@ -872,8 +1107,9 @@ console.log('Proxy6 Auth Extension: Ready');
     # ОСНОВНОЙ МЕТОД
     
     async def create_payment(self, payment_data: Dict[str, Any]) -> Dict[str, Any]:
-        """ИСПРАВЛЕННОЕ создание платежа с поддержкой ВТОРОЙ КАПЧИ (цель: до 40 секунд)"""
+        """⚡ ОПТИМИЗИРОВАННОЕ создание платежа (цель: 2-3 минуты)"""
         start_time = time.time()
+        self.performance_metrics['total_time'] = start_time
         try:
             logger.info(f"🚀 FIXED payment creation: {payment_data['amount']} {payment_data.get('currency_from', 'RUB')}")
             
@@ -964,7 +1200,15 @@ console.log('Proxy6 Auth Extension: Ready');
             result = await self._get_payment_result()
             
             total_time = time.time() - start_time
-            logger.info(f"✅ FIXED payment completed in {total_time:.1f}s!")
+            self.performance_metrics['total_time'] = total_time
+            
+            # ⚡ МЕТРИКИ ПРОИЗВОДИТЕЛЬНОСТИ
+            logger.info(f"⚡ OPTIMIZED payment completed in {total_time:.1f}s!")
+            logger.info(f"   📈 Performance metrics:")
+            logger.info(f"     Modal handling: {self.performance_metrics['modal_handling_time']:.1f}s")
+            logger.info(f"     CAPTCHA solving: {self.performance_metrics['captcha_time']:.1f}s")
+            logger.info(f"     Form filling: {self.performance_metrics['form_filling_time']:.1f}s")
+            
             return result
             
         except Exception as e:
@@ -1011,8 +1255,8 @@ console.log('Proxy6 Auth Extension: Ready');
     
     async def _do_country_and_amount_steps(self, payment_data: Dict[str, Any]):
         """Внутренняя реализация шагов выбора страны и суммы"""
-        # Шаг 1: Клик "ПЕРЕВЕСТИ ЗА РУБЕЖ" - БЕЗ ЗАДЕРЖЕК
-        await asyncio.sleep(1)  # Минимальная загрузка страницы
+        # Шаг 1: Клик "ПЕРЕВЕСТИ ЗА РУБЕЖ" - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.3)  # Минимальная загрузка страницы
         
         
         buttons = self.find_elements_fast(By.TAG_NAME, "button")
@@ -1022,8 +1266,8 @@ console.log('Proxy6 Auth Extension: Ready');
                     logger.info("✅ Step 1: Transfer abroad clicked")
                     break
         
-        # Шаг 2: Выбор Таджикистана - БЫСТРО
-        await asyncio.sleep(0.5)  # Минимальное ожидание модального окна
+        # Шаг 2: Выбор Таджикистана - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.2)  # Минимальное ожидание модального окна
         
         
         for selector in self.selectors['tajikistan_select']:
@@ -1036,11 +1280,11 @@ console.log('Proxy6 Auth Extension: Ready');
                 continue
             break
         
-        # Шаг 3: Заполнение суммы - МГНОВЕННО
-        await asyncio.sleep(0.5)
+        # Шаг 3: Заполнение суммы - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.2)
         
-        # Проверка на модальное окно
-        await self.handle_verification_modal_if_present()
+        # УНИВЕРСАЛЬНАЯ проверка на все типы модальных окон (Ошибка + Проверка данных)
+        await self.handle_all_modals_if_present()
         
         for selector in self.selectors['amount_input']:
             element = self.find_element_fast(By.XPATH, selector, timeout=1)
@@ -1049,8 +1293,8 @@ console.log('Proxy6 Auth Extension: Ready');
                     logger.info("✅ Step 3: Amount filled")
                     break
         
-        # Шаг 4: Валюта TJS - БЫСТРО
-        await asyncio.sleep(0.3)
+        # Шаг 4: Валюта TJS - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.1)
         
         for selector in self.selectors['currency_tjs']:
             elements = self.find_elements_fast(By.XPATH, selector)
@@ -1062,8 +1306,8 @@ console.log('Proxy6 Auth Extension: Ready');
                 continue
             break
         
-        # Шаг 5: Способ перевода - БЫСТРО
-        await asyncio.sleep(0.3)
+        # Шаг 5: Способ перевода - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.1)
         
         # Открываем dropdown
         for selector in self.selectors['transfer_method_dropdown']:
@@ -1072,7 +1316,7 @@ console.log('Proxy6 Auth Extension: Ready');
                 if element.is_displayed() and self.click_element_fast(element):
                     break
         
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.1)
         
         # DEBUG: Скриншот перед выбором банка
         self.take_debug_screenshot("bank_selection_before.png")
@@ -1149,8 +1393,8 @@ console.log('Proxy6 Auth Extension: Ready');
             self.take_screenshot_conditional("bank_selection_failed.png")
             raise Exception("Bank selection failed - cannot continue without selecting a bank")
         
-        # Шаг 6: ПРОДОЛЖИТЬ - БЫСТРО
-        await asyncio.sleep(0.3)
+        # Шаг 6: ПРОДОЛЖИТЬ - ОПТИМИЗИРОВАНО
+        await asyncio.sleep(0.1)
         
         buttons = self.find_elements_fast(By.TAG_NAME, "button")
         for btn in buttons:
@@ -1159,13 +1403,14 @@ console.log('Proxy6 Auth Extension: Ready');
                     logger.info("✅ Step 6: Continue clicked")
                     break
         
-        await asyncio.sleep(0.5)
-        self.take_screenshot_conditional("fast_steps_1-6.png")
-        logger.info("🏃‍♂️ Steps 1-6 completed FAST!")
+        await asyncio.sleep(0.2)
+        self.take_screenshot_conditional("optimized_steps_1-6.png")
+        logger.info("⚡ Steps 1-6 completed OPTIMIZED!")
     
     async def _fast_fill_forms(self, payment_data: Dict[str, Any]):
-        """БЫСТРОЕ заполнение форм 7-9 с автоматическим переключением прокси (цель: 8-10 секунд)"""
-        logger.info("🏃‍♂️ Fast form filling steps 7-9")
+        """⚡ ОПТИМИЗИРОВАННОЕ заполнение форм 7-9 (цель: 5-8 секунд)"""
+        form_start = time.time()
+        logger.info("⚡ Optimized form filling steps 7-9")
         
         # Выполняем заполнение форм с автоматическим переключением прокси при ошибках соединения
         await self.retry_on_connection_failure(
@@ -1175,84 +1420,91 @@ console.log('Proxy6 Auth Extension: Ready');
         )
     
     async def _do_fill_forms_steps(self, payment_data: Dict[str, Any]):
-        """Внутренняя реализация заполнения форм"""
-        # Шаг 7: Карта получателя - МГНОВЕННО
-        card_number = payment_data.get('recipient_card', '')
-        for selector in self.selectors['recipient_card']:
-            element = self.find_element_fast(By.XPATH, selector, timeout=1)
-            if element and element.is_displayed():
-                if self.type_text_fast(element, card_number):
-                    logger.info("✅ Step 7: Recipient card filled")
-                    break
-        
-        # Шаги 8-9: Данные отправителя - БЫСТРО
-        passport_data = payment_data.get('passport_data', {})
-        
-        # Переключение на Паспорт РФ
-        for selector in self.selectors['passport_rf_toggle']:
-            element = self.find_element_fast(By.XPATH, selector, timeout=1)
-            if element and element.is_displayed():
-                self.click_element_fast(element)
-                break
-        
-        # БЫСТРОЕ заполнение всех полей
-        fields_to_fill = [
-            ('passport_series', passport_data.get('passport_series', '')),
-            ('passport_number', passport_data.get('passport_number', '')),
-            ('passport_date', passport_data.get('passport_date', '')),
-            ('surname', passport_data.get('surname', '')),
-            ('name', passport_data.get('name', '')),
-            ('birthdate', passport_data.get('birthdate', '')),
-            ('phone', self._generate_phone())
-        ]
-        
-        for field_key, value in fields_to_fill:
-            if not value:
-                continue
-                
-            for selector in self.selectors[field_key]:
+        """Внутренняя реализация заполнения форм""" 
+        try:
+            form_start = time.time()
+            # Шаг 7: Карта получателя - МГНОВЕННО
+            card_number = payment_data.get('recipient_card', '')
+            for selector in self.selectors['recipient_card']:
                 element = self.find_element_fast(By.XPATH, selector, timeout=1)
-                if element and element.is_displayed() and element.is_enabled():
-                    if self.type_text_fast(element, str(value)):
-                        logger.debug(f"✅ {field_key} filled")
+                if element and element.is_displayed():
+                    if self.type_text_fast(element, card_number):
+                        logger.info("✅ Step 7: Recipient card filled")
                         break
-                else:
+            
+            # Шаги 8-9: Данные отправителя - БЫСТРО
+            passport_data = payment_data.get('passport_data', {})
+            
+            # Переключение на Паспорт РФ
+            for selector in self.selectors['passport_rf_toggle']:
+                element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                if element and element.is_displayed():
+                    self.click_element_fast(element)
+                    break
+            
+            # БЫСТРОЕ заполнение всех полей
+            fields_to_fill = [
+                ('passport_series', passport_data.get('passport_series', '')),
+                ('passport_number', passport_data.get('passport_number', '')),
+                ('passport_date', passport_data.get('passport_date', '')),
+                ('surname', passport_data.get('surname', '')),
+                ('name', passport_data.get('name', '')),
+                ('birthdate', passport_data.get('birthdate', '')),
+                ('phone', self._generate_phone())
+            ]
+            
+            for field_key, value in fields_to_fill:
+                if not value:
                     continue
-                break
-        
-        # Шаг 9: Checkbox согласия - ПРИНУДИТЕЛЬНО
-        await asyncio.sleep(0.3)
-        
-        checkboxes = self.find_elements_fast(By.XPATH, "//input[@type='checkbox']")
-        checkbox_checked = False
-        for cb in checkboxes:
-            try:
-                # Принудительный клик через JavaScript
-                self._driver.execute_script("arguments[0].click();", cb)
-                if cb.is_selected():
-                    logger.info("✅ Step 9: Agreement checkbox checked")
-                    checkbox_checked = True
+                    
+                for selector in self.selectors[field_key]:
+                    element = self.find_element_fast(By.XPATH, selector, timeout=1)
+                    if element and element.is_displayed() and element.is_enabled():
+                        if self.type_text_fast(element, str(value)):
+                            logger.debug(f"✅ {field_key} filled")
+                            break
+                    else:
+                        continue
                     break
-            except:
-                continue
-        
-        # БЫСТРАЯ ПРОВЕРКА: После клика по чекбоксу согласия может появиться модальное окно "Проверка данных"
-        if checkbox_checked:
-            logger.info("🚨 FAST CHECK: Quick modal check after checkbox (2s max)")
-            await asyncio.sleep(0.5)  # Минимальная задержка
             
-            # Быстрая проверка только 2 секунды вместо 10
-            for attempt in range(2):
-                modal_detected = await self.handle_verification_modal_if_present()
-                if modal_detected:
-                    logger.info("✅ HANDLED: Modal found and processed quickly")
-                    break
-                await asyncio.sleep(1)  # Проверяем 2 раза по 1 секунде
+            # Шаг 9: Checkbox согласия - ОПТИМИЗИРОВАНО
+            await asyncio.sleep(0.1)
             
-            logger.info("✅ FAST CHECK: Modal check completed (2s total)")
-        
-        self.take_screenshot_conditional("fast_forms_filled.png")
-        logger.info("🏃‍♂️ Forms filled FAST!")
+            checkboxes = self.find_elements_fast(By.XPATH, "//input[@type='checkbox']")
+            checkbox_checked = False
+            for cb in checkboxes:
+                try:
+                    # Принудительный клик через JavaScript
+                    self._driver.execute_script("arguments[0].click();", cb)
+                    if cb.is_selected():
+                        logger.info("✅ Step 9: Agreement checkbox checked")
+                        checkbox_checked = True
+                        break
+                except:
+                    continue
+            
+            # БЫСТРАЯ ПРОВЕРКА: После клика по чекбоксу согласия может появиться модальное окно "Проверка данных"
+            if checkbox_checked:
+                logger.info("🚨 FAST CHECK: Quick modal check after checkbox (2s max)")
+                await asyncio.sleep(0.2)  # Оптимизированная задержка
+                
+                # УНИВЕРСАЛЬНАЯ быстрая проверка только 2 секунды вместо 10
+                for attempt in range(2):
+                    modal_detected = await self.handle_all_modals_if_present()
+                    if modal_detected:
+                        logger.info("✅ HANDLED: Modal found and processed quickly")
+                        break
+                    await asyncio.sleep(1)  # Проверяем 2 раза по 1 секунде
+                
+                logger.info("✅ FAST CHECK: Modal check completed (2s total)")
+            
+            self.performance_metrics['form_filling_time'] += time.time() - form_start
+            self.take_screenshot_conditional("optimized_forms_filled.png")
+            logger.info("⚡ Forms filled OPTIMIZED!")
+        except Exception as e:
+            self.performance_metrics['form_filling_time'] += time.time() - form_start
+            logger.error(f"Form filling error: {e}")
+            raise
     
     async def _fast_submit_and_captcha(self):
         """БЫСТРАЯ отправка и решение ПЕРВОЙ капчи с автоматическим переключением прокси (цель: до 35 секунд с капчей)"""
@@ -1278,15 +1530,15 @@ console.log('Proxy6 Auth Extension: Ready');
                     form_submitted = True
                     break
         
-        await asyncio.sleep(1)  # Ожидание обработки
+        await asyncio.sleep(0.5)  # Оптимизированное ожидание обработки
         
         # КРИТИЧЕСКАЯ ПРОВЕРКА: После отправки формы может появиться модальное окно "Проверка данных"
         if form_submitted:
             logger.info("🚨 MONITORING: Checking for 'Проверка данных' modal after form submit")
             
-            # Быстрая проверка 2 секунды после отправки
+            # УНИВЕРСАЛЬНАЯ быстрая проверка 2 секунды после отправки
             for attempt in range(2):
-                modal_detected = await self.handle_verification_modal_if_present()
+                modal_detected = await self.handle_all_modals_if_present()
                 if modal_detected:
                     logger.info("✅ HANDLED: Modal processed after form submit")
                     break
@@ -1296,7 +1548,9 @@ console.log('Proxy6 Auth Extension: Ready');
         
         # Шаг 11: КРИТИЧЕСКОЕ решение ПЕРВОЙ капчи
         logger.info("🔐 Step 11: CRITICAL FIRST CAPTCHA solving")
+        captcha_start = time.time()
         captcha_solved = await self.captcha_solver.solve_captcha(self._driver)
+        self.performance_metrics['captcha_time'] += time.time() - captcha_start
         
         if captcha_solved:
             logger.info("✅ Step 11: FIRST CAPTCHA solved successfully")
@@ -1304,9 +1558,9 @@ console.log('Proxy6 Auth Extension: Ready');
             # КРИТИЧЕСКАЯ ПРОВЕРКА: После решения первой капчи может появиться модальное окно "Проверка данных"
             logger.info("🚨 MONITORING: Checking for 'Проверка данных' modal after FIRST captcha")
             
-            # Быстрая проверка 2 секунды после решения капчи
+            # УНИВЕРСАЛЬНАЯ быстрая проверка 2 секунды после решения капчи
             for attempt in range(2):
-                modal_detected = await self.handle_verification_modal_if_present()
+                modal_detected = await self.handle_all_modals_if_present()
                 if modal_detected:
                     logger.info("✅ HANDLED: Modal processed after FIRST captcha")
                     break
@@ -1397,17 +1651,33 @@ console.log('Proxy6 Auth Extension: Ready');
         # ВОССТАНОВЛЕННЫЙ ПРОСТОЙ ПОДХОД: оригинальный селектор [last()]
         logger.info("🎯 ORIGINAL: Using simple [last()] selector for modal button")
         
-        # ИСПРАВЛЕННЫЕ селекторы на основе скриншота модального окна
+        # ОПТИМИЗИРОВАННЫЕ селекторы: Работающие селекторы в приоритете
         modal_button_selectors = [
-            # Любой элемент с текстом ПРОДОЛЖИТЬ (не только button)
-            "//*[contains(text(), 'ПРОДОЛЖИТЬ')]",  
-            "//*[contains(text(), 'Продолжить')]",
-            "//*[text()='ПРОДОЛЖИТЬ']",
-            "//*[text()='Продолжить']",
-            # В контексте модального окна "Проверка данных"
+            # 🎯 ПРИОРИТЕТ 1: РАБОТАЮЩИЙ СЕЛЕКТОР из успешных логов
+            "//div[@role='presentation']//button[contains(text(), 'Продолжить')]",  # ✅ СРАБОТАЛ в логах
+            "//div[@role='presentation']//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            
+            # 🎯 ПРИОРИТЕТ 2: Вариации работающего селектора
+            "//button[contains(text(), 'Продолжить')]",
+            "//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            "//button[text()='ПРОДОЛЖИТЬ']",
+            "//button[text()='Продолжить']",
+            
+            # 🎯 ПРИОРИТЕТ 3: По координатам X=623 и цвету (как в успешных логах)
+            "//button[contains(text(), 'ПРОДОЛЖИТЬ') and contains(@style, 'rgb(0,124,255)')]",
+            "//button[contains(text(), 'Продолжить') and contains(@style, 'rgb(0,124,255)')]",
+            
+            # ПРИОРИТЕТ 4: В контексте модального окна
+            "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'ПРОДОЛЖИТЬ')]",
+            "//div[contains(@class, 'MuiModal-root')]//button[contains(text(), 'Продолжить')]",
+            
+            # ПРИОРИТЕТ 5: Поиск по контексту данных
             "//div[contains(text(), 'Проверка данных')]/following::*[contains(text(), 'ПРОДОЛЖИТЬ')]",
             "//div[contains(text(), 'Проверьте данные получателя')]/following::*[contains(text(), 'ПРОДОЛЖИТЬ')]",
-            # Кликабельные элементы с текстом ПРОДОЛЖИТЬ
+            
+            # FALLBACK: Любые элементы с текстом ПРОДОЛЖИТЬ
+            "//*[contains(text(), 'ПРОДОЛЖИТЬ')]",  
+            "//*[contains(text(), 'Продолжить')]",
             "//div[contains(text(), 'ПРОДОЛЖИТЬ') and contains(@class, 'btn')]",
             "//a[contains(text(), 'ПРОДОЛЖИТЬ')]",
             "//span[contains(text(), 'ПРОДОЛЖИТЬ')]"
@@ -1421,6 +1691,7 @@ console.log('Proxy6 Auth Extension: Ready');
                     # КРИТИЧНО: Проверяем что это НЕ крестик закрытия
                     button_text = button.text.strip() if hasattr(button, 'text') else ''
                     button_html = button.get_attribute('outerHTML')[:100] if button else ''
+                    button_location = button.location
                     
                     # Фильтруем вредные элементы
                     if (button_text in ['×', '✕', 'X', 'x'] or 
@@ -1430,8 +1701,19 @@ console.log('Proxy6 Auth Extension: Ready');
                         logger.debug(f"⚠️ Skipping close button: text='{button_text}', html='{button_html[:50]}'")
                         continue
                     
-                    logger.info(f"✅ FIXED: Found modal button with selector: {selector}")
-                    logger.info(f"   Button text: '{button_text}', HTML: '{button_html[:50]}'")
+                    # Позиционная проверка: модальные кнопки обычно x < 800
+                    x_coord = button_location.get('x', 0)
+                    is_modal_position = x_coord < 800
+                    
+                    logger.info(f"✅ OPTIMIZED: Found modal button with selector: {selector}")
+                    logger.info(f"   Button text: '{button_text}', position: x={x_coord}, modal_pos: {is_modal_position}")
+                    
+                    # Проверяем корректность текста и позиции
+                    if (any(text.lower() in button_text.lower() for text in ['продолжить', 'продолжить']) and is_modal_position):
+                        logger.info(f"✅ CONFIRMED: Valid modal button, position: x={x_coord}")
+                    else:
+                        logger.debug(f"⚠️ Button validation failed: text='{button_text}', modal_pos={is_modal_position}")
+                        continue
                     
                     # Скроллим к кнопке
                     self._driver.execute_script("arguments[0].scrollIntoView(true);", button)
@@ -1440,27 +1722,76 @@ console.log('Proxy6 Auth Extension: Ready');
                     # Кликаем простым способом
                     try:
                         button.click()
-                        logger.info("✅ FIXED: Modal button clicked successfully")
+                        logger.info("✅ OPTIMIZED: Modal button clicked successfully")
                         button_clicked = True
                         break
                     except:
                         # Fallback к JavaScript клику
                         self._driver.execute_script("arguments[0].click();", button)
-                        logger.info("✅ FIXED: Modal button clicked via JavaScript")
+                        logger.info("✅ OPTIMIZED: Modal button clicked via JavaScript")
                         button_clicked = True
                         break
             except Exception as e:
                 logger.debug(f"⚠️ Selector {selector} failed: {e}")
                 continue
         
+        # 🔄 ERROR HANDLING: Логируем состояние для диагностики
+        if not button_clicked:
+            logger.warning("⚠️ DIAGNOSTIC: Modal button not found - analyzing page state")
+            try:
+                page_text = self._driver.find_element(By.TAG_NAME, "body").text[:500]
+                logger.debug(f"Current page text: {page_text}")
+                
+                current_url = self._driver.current_url
+                logger.info(f"Current URL: {current_url}")
+                
+                if 'transferId=' in current_url:
+                    logger.info("✅ DIAGNOSTIC: Already on transfer page - modal might not be needed")
+                    
+            except Exception as diag_error:
+                logger.debug(f"Diagnostic failed: {diag_error}")
+        
+        # FALLBACK: Поиск по координатам X=623 (как в успешных логах)
+        if not button_clicked:
+            logger.info("🎯 FALLBACK: Поиск кнопки ПРОДОЛЖИТЬ по координатам x=623")
+            try:
+                coordinate_script = """
+                var buttons = document.querySelectorAll('button, div, span, a');
+                for (var i = 0; i < buttons.length; i++) {
+                    var btn = buttons[i];
+                    var rect = btn.getBoundingClientRect();
+                    var text = btn.textContent || btn.innerText || '';
+                    // Поиск элемента с x=623 (±50 пикселей) и текстом "Продолжить"
+                    if (Math.abs(rect.left - 623) < 50 && text.toLowerCase().includes('продолжить')) {
+                        return {found: true, element: btn, x: rect.left, text: text};
+                    }
+                }
+                return {found: false};
+                """
+                result = self._driver.execute_script(coordinate_script)
+                if result and result.get('found'):
+                    logger.info(f"✅ COORDINATE FALLBACK: Found button at x={result.get('x')}: '{result.get('text')}'")
+                    element = result.get('element')
+                    if element:
+                        try:
+                            element.click()
+                            logger.info("✅ COORDINATE button clicked successfully")
+                            button_clicked = True
+                        except:
+                            self._driver.execute_script("arguments[0].click();", element)
+                            logger.info("✅ COORDINATE button clicked via JavaScript")
+                            button_clicked = True
+            except Exception as e:
+                logger.debug(f"⚠️ Coordinate fallback failed: {e}")
+        
         if button_clicked:
-            logger.info("✅ ORIGINAL SUCCESS: Modal handled with simple approach!")
+            logger.info("✅ OPTIMIZED SUCCESS: Modal handled with enhanced selectors!")
             await asyncio.sleep(2)
             self.take_screenshot_conditional("step12_modal_success.png")
         else:
-            logger.error("❌ ORIGINAL FAILURE: Could not find modal button")
+            logger.error("❌ OPTIMIZED FAILURE: Could not find modal button (all methods failed)")
             self.take_screenshot_conditional("step12_modal_failure.png")
-            raise Exception("ORIGINAL: Failed to handle modal - payment cannot be completed")
+            raise Exception("OPTIMIZED: Failed to handle modal - payment cannot be completed")
         
         elapsed = time.time() - step12_start
         logger.info(f"✅ Step 12 completed in {elapsed:.1f}s (modal found and processed)")
@@ -1604,7 +1935,21 @@ console.log('Proxy6 Auth Extension: Ready');
             
             # Запоминаем текущий URL перед кликом для проверки
             url_before = self._driver.current_url
-            await asyncio.sleep(3)  # Ждем обработку формы
+            
+            # ОПТИМИЗИРОВАНО: Более частая проверка модальных окон
+            logger.info("🚨 БЫСТРАЯ ПРОВЕРКА: Ищем модальные окна после клика 'ПРОДОЛЖИТЬ'")
+            for wait_attempt in range(6):  # 6 попыток по 0.5 секунды = 3 секунды общего времени
+                await asyncio.sleep(0.5)
+                
+                # Проверяем модальные окна каждые 0.5 секунды для быстрого обнаружения
+                modal_detected = await self.handle_all_modals_if_present()
+                if modal_detected:
+                    logger.info("🚨 КРИТИЧНО: Модальное окно обнаружено после клика 'ПРОДОЛЖИТЬ'!")
+                    # Продолжаем ожидание после обработки модального окна
+                    continue
+                
+                logger.debug(f"⏳ БЫСТРАЯ обработка формы: {(wait_attempt + 1) * 0.5:.1f}/3.0 секунд")
+            
             url_after = self._driver.current_url
             
             # Проверяем изменилась ли страница или появились ли ошибки
