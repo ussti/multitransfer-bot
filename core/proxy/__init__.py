@@ -2,7 +2,6 @@
 Proxy management module
 """
 
-from .providers import Proxy6Provider, ProxyInfo, ProxyVersion, ProxyType
-from .manager import ProxyManager
+from .manager import ProxyManager, ProxyInfo, ProxyVersion, ProxyType
 
-__all__ = ['Proxy6Provider', 'ProxyInfo', 'ProxyVersion', 'ProxyType', 'ProxyManager']
+__all__ = ['ProxyManager', 'ProxyInfo', 'ProxyVersion', 'ProxyType']

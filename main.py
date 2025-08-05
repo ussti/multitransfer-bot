@@ -13,7 +13,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -121,7 +121,6 @@ async def command_start_handler(message: Message) -> None:
 /settings - настройка ваших реквизитов
 /payment [сумма] - создать новый платеж
 /proxy - статус прокси-серверов
-/proxy_toggle - включить/выключить прокси
 
 <b>🚀 Начнем?</b>
 Сначала настройте ваши реквизиты командой /settings
@@ -142,7 +141,6 @@ async def command_help_handler(message: Message) -> None:
 • <code>/settings</code> - настройка реквизитов
 • <code>/payment [сумма]</code> - создать платеж
 • <code>/proxy</code> - статус прокси-серверов
-• <code>/proxy_toggle</code> - включить/выключить прокси
 
 <b>Примеры использования:</b>
 • <code>/payment 5000</code> - платеж на 5000 рублей
@@ -195,9 +193,6 @@ async def command_proxy_handler(message: Message) -> None:
         # Получаем статистику ПОСЛЕ получения прокси
         stats = proxy_manager.get_stats()
         
-        # Проверяем статус переключателя
-        proxy_disabled_file = "/tmp/proxy_disabled"
-        is_manually_disabled = os.path.exists(proxy_disabled_file)
         
         # Формируем ответ
         proxy_text = f"""
@@ -213,9 +208,9 @@ async def command_proxy_handler(message: Message) -> None:
 • Обновление: {stats['last_update'] or 'Никогда'}
 {proxy_info}
 
-🔧 <b>Управление:</b> Используйте /proxy_toggle для включения/отключения
+🔧 <b>Управление:</b> Прокси управляются автоматически
 
-💡 <b>Подсказка:</b> {'Прокси отключены командой /proxy_toggle' if is_manually_disabled else ('Прокси работает корректно! Платежи будут создаваться через защищённое соединение.' if proxy else 'Если прокси недоступны, проверьте баланс на Proxy6.net и купите активные прокси.')}
+💡 <b>Подсказка:</b> {'Прокси работает корректно! Платежи будут создаваться через защищённое соединение.' if proxy else 'Если прокси недоступны, проверьте баланс на Proxy6.net и купите активные прокси.'}
 """
         
         await message.answer(proxy_text)
@@ -227,55 +222,6 @@ async def command_proxy_handler(message: Message) -> None:
             "Попробуйте позже или обратитесь к администратору."
         )
 
-@dp.message(Command("proxy_toggle"))
-async def command_proxy_toggle_handler(message: Message) -> None:
-    """Handler for /proxy_toggle command"""
-    try:
-        logger.info(f"Proxy toggle command received from user {message.from_user.id}")
-        
-        # Читаем текущее состояние из конфига
-        config_dict = config.to_dict()
-        current_proxy_enabled = config_dict.get('proxy', {}).get('api_key') is not None
-        
-        # Создаем временный файл для отключения прокси
-        proxy_disabled_file = "/tmp/proxy_disabled"
-        
-        if os.path.exists(proxy_disabled_file):
-            # Прокси отключены, включаем
-            os.remove(proxy_disabled_file)
-            status_text = """
-🟢 <b>Прокси ВКЛЮЧЕНЫ</b>
-
-✅ Платежи будут создаваться через прокси-сервер
-🌐 IP адрес будет скрыт
-🔒 Повышенная безопасность
-
-<b>Активный прокси:</b> 45.135.31.34:8000
-"""
-            logger.info(f"User {message.from_user.id} ENABLED proxy")
-        else:
-            # Прокси включены, отключаем
-            with open(proxy_disabled_file, 'w') as f:
-                f.write("disabled")
-            status_text = """
-🔴 <b>Прокси ОТКЛЮЧЕНЫ</b>
-
-⚠️ Платежи будут создаваться БЕЗ прокси
-🌍 Используется ваш реальный IP адрес
-⚡ Быстрее, но менее безопасно
-
-<b>Режим:</b> Прямое соединение
-"""
-            logger.info(f"User {message.from_user.id} DISABLED proxy")
-        
-        await message.answer(status_text)
-        
-    except Exception as e:
-        logger.error(f"Error in proxy toggle command: {e}")
-        await message.answer(
-            "❌ <b>Ошибка переключения прокси</b>\n\n"
-            "Попробуйте позже или обратитесь к администратору."
-        )
 
 @dp.message(Command("settings"))
 async def command_settings_handler(message: Message, state: FSMContext) -> None:
@@ -624,13 +570,12 @@ async def command_payment_handler(message: Message) -> None:
 
 <b>🎯 Для оплаты:</b>"""
                     
-                    # Add QR code if available
-                    if result.get('qr_code_url'):
-                        success_text += f"\n📱 <a href=\"{result['qr_code_url']}\">QR-код для оплаты</a>"
+                    qr_code_data = result.get('qr_code_url')
+                    payment_url = result.get('payment_url')
                     
-                    # Add payment URL if available
-                    if result.get('payment_url'):
-                        success_text += f"\n🔗 <a href=\"{result['payment_url']}\">Ссылка для оплаты</a>"
+                    # Добавляем ссылку на оплату
+                    if payment_url:
+                        success_text += f"\n🔗 <a href=\"{payment_url}\">Открыть страницу оплаты</a>"
                     
                     # Add payment ID if available
                     if result.get('payment_id'):
@@ -638,10 +583,43 @@ async def command_payment_handler(message: Message) -> None:
                     
                     success_text += f"\n\n<b>⏱️ Время обработки:</b> {result.get('processing_time', 0):.1f} сек"
                     success_text += f"\n<b>👤 Паспорт:</b> {result.get('passport_used', 'N/A')}"
-                    success_text += "\n\n<b>💡 Совет:</b> Сохраните QR-код и оплатите в удобное время!"
+                    success_text += "\n\n<b>💡 Совет:</b> Отсканируйте QR-код для оплаты!"
                     
-                    await processing_message.edit_text(success_text, disable_web_page_preview=False)
-                    logger.info(f"✅ Payment successful for user {message.from_user.id}")
+                    # Отправляем QR код как фото + текст
+                    if qr_code_data and qr_code_data.startswith('data:image'):
+                        try:
+                            import base64
+                            import io
+                            from aiogram.types import BufferedInputFile
+                            
+                            # Конвертируем base64 в байты
+                            image_data = qr_code_data.split(',')[1]  # Убираем "data:image/png;base64,"
+                            image_bytes = base64.b64decode(image_data)
+                            
+                            # Создаем файл для отправки
+                            qr_file = BufferedInputFile(image_bytes, filename="qr_code.png")
+                            
+                            # Удаляем сообщение о обработке
+                            await processing_message.delete()
+                            
+                            # Отправляем QR код с подписью
+                            await message.answer_photo(
+                                photo=qr_file,
+                                caption=success_text,
+                                parse_mode='HTML',
+                                disable_web_page_preview=False
+                            )
+                            logger.info(f"✅ Payment successful with QR code sent to user {message.from_user.id}")
+                            
+                        except Exception as qr_error:
+                            logger.error(f"⚠️ Failed to send QR code: {qr_error}")
+                            # Отправляем обычное сообщение без QR
+                            await processing_message.edit_text(success_text, disable_web_page_preview=False)
+                            logger.info(f"✅ Payment successful (without QR) for user {message.from_user.id}")
+                    else:
+                        # QR код не найден - отправляем обычное сообщение
+                        await processing_message.edit_text(success_text, disable_web_page_preview=False)
+                        logger.info(f"✅ Payment successful (no QR data) for user {message.from_user.id}")
                     
                 else:
                     # FAILURE - Show error

@@ -15,7 +15,7 @@ database:
 proxy:
   # Proxy6.net static configuration
   enabled: true
-  api_key: "dummy_key"  # Не используется для статических прокси
+  api_key: "b9177b422e-fc2c5a2ad2-df5ae8787e"  # Рабочий Proxy6 ключ
   country: "ru"
   
   # Deprecated multi-provider config (ProxyLine disabled)
@@ -37,7 +37,7 @@ proxy:
   reset_to_primary_interval: 600  # Reset to primary every 10 minutes
   
   # SSH tunnel для обхода Chrome диалогов авторизации
-  use_ssh_tunnel: false  # ИСПОЛЬЗУЕМ Chrome Extension (стабильнее)
+  use_ssh_tunnel: true   # Включаем для рабочей архитектуры SOCKS5
   tunnel_timeout: 30    # Таймаут создания туннеля в секундах
   
 # API-only captcha configuration (без плагина)

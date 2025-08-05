@@ -70,9 +70,30 @@ class Proxy6Provider:
         self._current_proxy_index = 0
         self._failed_proxies = set()
         
-        # Статические прокси от Proxy6.net (приоритет: Германия > Россия)
+        # Статические прокси от Proxy6.net (приоритет: Европейские SOCKS5)
         self._static_proxies = [
-            # Немецкий SOCKS5 прокси (переформатирован, приоритет)
+            # Новые европейские SOCKS5 прокси (приоритет)
+            {
+                'id': 'proxy6_eu_socks5_1',
+                'ip': '45.140.248.33',
+                'port': '8000',
+                'user': '5ezFdV',
+                'pass': 'Y9wFyh',
+                'country': 'eu',
+                'type': 'socks5',
+                'active': True
+            },
+            {
+                'id': 'proxy6_eu_socks5_2',
+                'ip': '168.81.66.239',
+                'port': '8000',
+                'user': 'Mqnfwa',
+                'pass': '2phy9N',
+                'country': 'eu',
+                'type': 'socks5',
+                'active': True
+            },
+            # Немецкий SOCKS5 прокси (проверенный, fallback)
             {
                 'id': 'proxy6_de_socks5',
                 'ip': '196.16.220.52',
@@ -83,26 +104,26 @@ class Proxy6Provider:
                 'type': 'socks5',
                 'active': True
             },
-            # Российские прокси (fallback)
+            # Российские SOCKS5 прокси (отключены из-за geo-блокировки)
             {
-                'id': 'proxy6_ru_1',
+                'id': 'proxy6_ru_socks5_1',
                 'ip': '45.10.65.50',
                 'port': '8000',
                 'user': '2G4L9A',
                 'pass': 'pphKeV',
                 'country': 'ru',
-                'type': 'http',
-                'active': True
+                'type': 'socks5',
+                'active': False
             },
             {
-                'id': 'proxy6_ru_2', 
+                'id': 'proxy6_ru_socks5_2', 
                 'ip': '45.135.31.34',
                 'port': '8000',
                 'user': 'gzqPrg',
                 'pass': 'SJHhke',
                 'country': 'ru',
-                'type': 'http',
-                'active': True
+                'type': 'socks5',
+                'active': False
             }
         ]
         

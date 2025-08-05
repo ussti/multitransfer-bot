@@ -37,9 +37,8 @@ curl --proxy http://GALsB4:6UwJ3b@196.16.220.52:8000 http://httpbin.org/ip
 # Run automation test with proxy
 PYTHONPATH=. python3 tests/automation/test_complete_automation.py
 
-# Enable/disable proxy for testing
-rm -f /tmp/proxy_disabled  # Enable proxy
-touch /tmp/proxy_disabled  # Disable proxy
+# Monitor proxy for testing
+# Proxy is managed automatically
 
 # Monitor proxy logs
 tail -f logs/app.log | grep -i proxy

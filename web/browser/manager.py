@@ -21,7 +21,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from core.proxy.manager import ProxyManager
-from core.proxy.providers import ProxyInfo
+from core.proxy.manager import ProxyInfo
 from web.captcha.solver import CaptchaSolver
 
 logger = logging.getLogger(__name__)

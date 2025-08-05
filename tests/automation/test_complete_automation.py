@@ -169,40 +169,30 @@ async def test_complete_flow():
         # Шаг 4: Выбор валюты TJS
         logger.info("📍 Step 4: Select TJS currency")
         
-        # Ищем кнопку TJS в разделе валют
-        tjs_selectors = [
-            "//button[contains(text(), 'TJS')]",
-            "//div[contains(text(), 'TJS')]",
-            "//*[contains(@class, 'currency') and contains(text(), 'TJS')]",
-            "//*[text()='TJS']"
-        ]
+        # ОПТИМИЗИРОВАНО: Используем только рабочий селектор для TJS
+        working_selector = "//*[text()='TJS']"
+        elements = await browser_manager.find_elements_safe(By.XPATH, working_selector)
+        logger.info(f"🚀 OPTIMIZED: Found {len(elements)} TJS elements with working selector")
         
         tjs_selected = False
-        for selector in tjs_selectors:
-            elements = await browser_manager.find_elements_safe(By.XPATH, selector)
-            logger.info(f"Found {len(elements)} TJS elements with selector: {selector}")
-            
-            for element in elements:
-                try:
-                    if element.is_displayed() and element.is_enabled():
-                        logger.info("🎯 Clicking TJS currency button")
-                        await asyncio.sleep(random.uniform(0.3, 0.7))
-                        
-                        if await browser_manager.click_element_safe(element):
-                            logger.info("✅ Successfully selected TJS currency")
-                            tjs_selected = True
-                            break
-                        else:
-                            browser_manager.driver.execute_script("arguments[0].click();", element)
-                            logger.info("✅ Successfully selected TJS currency via JavaScript")
-                            tjs_selected = True
-                            break
-                except Exception as e:
-                    logger.debug(f"TJS element click failed: {e}")
-                    continue
-            
-            if tjs_selected:
-                break
+        for element in elements:
+            try:
+                if element.is_displayed() and element.is_enabled():
+                    logger.info("🎯 Clicking TJS currency button")
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    
+                    if await browser_manager.click_element_safe(element):
+                        logger.info("✅ Successfully selected TJS currency")
+                        tjs_selected = True
+                        break
+                    else:
+                        browser_manager.driver.execute_script("arguments[0].click();", element)
+                        logger.info("✅ Successfully selected TJS currency via JavaScript")
+                        tjs_selected = True
+                        break
+            except Exception as e:
+                logger.debug(f"TJS element click failed: {e}")
+                continue
         
         if not tjs_selected:
             logger.warning("⚠️ Could not select TJS currency, continuing...")
@@ -213,39 +203,29 @@ async def test_complete_flow():
         # Шаг 5: Выбор способа перевода "Все карты"
         logger.info("📍 Step 5: Select 'Все карты' transfer method")
         
-        # Сначала ищем dropdown или кнопку для выбора способа перевода
-        transfer_method_selectors = [
-            "//div[contains(text(), 'Способ перевода')]//following-sibling::*",
-            "//div[contains(text(), 'Способ перевода')]//parent::*//div[contains(@class, 'dropdown') or contains(@class, 'select')]",
-            "//div[contains(@class, 'transfer-method') or contains(@class, 'method')]",
-            "//*[contains(text(), 'Выберите способ') or contains(text(), 'способ')]"
-        ]
+        # ОПТИМИЗИРОВАНО: Используем только рабочий селектор
+        working_selector = "//*[contains(text(), 'Выберите способ') or contains(text(), 'способ')]"
+        elements = await browser_manager.find_elements_safe(By.XPATH, working_selector)
+        logger.info(f"🚀 OPTIMIZED: Found {len(elements)} transfer method elements with working selector")
         
         method_dropdown_clicked = False
-        for selector in transfer_method_selectors:
-            elements = await browser_manager.find_elements_safe(By.XPATH, selector)
-            logger.info(f"Found {len(elements)} transfer method elements with selector: {selector}")
-            
-            for element in elements:
-                try:
-                    if element.is_displayed():
-                        logger.info("🎯 Clicking transfer method dropdown")
-                        await asyncio.sleep(random.uniform(0.3, 0.7))
-                        
-                        if await browser_manager.click_element_safe(element):
-                            logger.info("✅ Successfully clicked transfer method dropdown")
-                            method_dropdown_clicked = True
-                            break
-                        else:
-                            browser_manager.driver.execute_script("arguments[0].click();", element)
-                            logger.info("✅ Successfully clicked transfer method dropdown via JavaScript")
-                            method_dropdown_clicked = True
-                            break
-                except:
-                    continue
-            
-            if method_dropdown_clicked:
-                break
+        for element in elements:
+            try:
+                if element.is_displayed():
+                    logger.info("🎯 Clicking transfer method dropdown")
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    
+                    if await browser_manager.click_element_safe(element):
+                        logger.info("✅ Successfully clicked transfer method dropdown")
+                        method_dropdown_clicked = True
+                        break
+                    else:
+                        browser_manager.driver.execute_script("arguments[0].click();", element)
+                        logger.info("✅ Successfully clicked transfer method dropdown via JavaScript")
+                        method_dropdown_clicked = True
+                        break
+            except:
+                continue
         
         await asyncio.sleep(3)
         await browser_manager.take_screenshot("step5_transfer_method_dropdown.png")
