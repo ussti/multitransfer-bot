@@ -18,6 +18,7 @@ from core.proxy.manager import ProxyManager
 from core.config import get_config
 from utils.exceptions import PaymentError, AutomationError
 from utils.validators import validate_amount, validate_card_number
+from web.anti_detection import HumanBehavior, StealthBrowser, BehavioralCamouflage
 
 logger = logging.getLogger(__name__)
 
@@ -343,31 +344,12 @@ class PaymentService:
     
     async def _run_full_automation(self, browser_manager, payment_id: int, automation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Полная автоматизация создания платежа (адаптировано из test_complete_automation.py)
+        Полная автоматизация создания платежа с ANTI-DETECTION техниками
         """
         import random
         from selenium.webdriver.common.by import By
         
-        async def human_type_text(element, text, min_delay=0.05, max_delay=0.2):
-            """Человечный ввод текста по одному символу с случайными задержками"""
-            try:
-                element.clear()
-                await asyncio.sleep(random.uniform(0.1, 0.3))
-                
-                logger.info(f"🖊️ Typing '{text}' character by character...")
-                
-                for char in text:
-                    element.send_keys(char)
-                    delay = random.uniform(min_delay, max_delay)
-                    await asyncio.sleep(delay)
-                
-                await asyncio.sleep(random.uniform(0.2, 0.5))
-                logger.info(f"✅ Finished typing '{text}'")
-                return True
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to type '{text}': {e}")
-                return False
+        # ЗАМЕНЕНО НА ANTI-DETECTION: Используем HumanBehavior.human_type() вместо custom функции
         
         try:
             logger.info("🌐 Navigating to multitransfer.ru...")
@@ -375,7 +357,13 @@ class PaymentService:
             if not success:
                 raise AutomationError("Failed to navigate to multitransfer.ru")
             
-            await asyncio.sleep(random.uniform(3, 5))
+            # ANTI-DETECTION: Pre-browsing behavior - естественное изучение сайта перед основными действиями
+            logger.info("🎭 Starting pre-browsing behavior...")  
+            await BehavioralCamouflage.pre_browsing_behavior(browser_manager.driver, "https://multitransfer.ru", duration_minutes=1.5)
+            
+            # ANTI-DETECTION: Human delay instead of fixed sleep
+            delay = HumanBehavior.random_delay(3.0, 5.0)
+            await asyncio.sleep(delay)
             
             # Шаг 1: Клик по кнопке "ПЕРЕВЕСТИ ЗА РУБЕЖ"
             logger.info("📍 Step 1: Click 'ПЕРЕВЕСТИ ЗА РУБЕЖ'")
@@ -430,7 +418,9 @@ class PaymentService:
             if not tajikistan_clicked:
                 raise AutomationError("Could not select Tajikistan")
             
-            await asyncio.sleep(random.uniform(2, 4))
+            # ANTI-DETECTION: Human delay between steps
+            delay = HumanBehavior.random_delay(2.0, 4.0)  
+            await asyncio.sleep(delay)
             
             # Шаг 3: Заполнение суммы
             logger.info("📍 Step 3: Fill amount")
@@ -443,18 +433,24 @@ class PaymentService:
                 try:
                     if inp.is_displayed() and inp.is_enabled():
                         logger.info(f"🎯 Filling amount field with {amount_str}")
-                        success = await human_type_text(inp, amount_str, 0.1, 0.3)
-                        if success:
-                            logger.info("✅ Amount filled successfully")
+                        # ANTI-DETECTION: Используем HumanBehavior.human_type() для естественного ввода
+                        try:
+                            HumanBehavior.human_type(inp, amount_str, browser_manager.driver)
+                            logger.info("✅ Amount filled successfully with human behavior")
                             amount_filled = True
                             break
+                        except Exception as e:
+                            logger.error(f"❌ Failed to type amount: {e}")
+                            continue
                 except:
                     pass
             
             if not amount_filled:
                 raise AutomationError("Could not fill amount")
                 
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 4: Выбор валюты TJS
             logger.info("📍 Step 4: Select TJS currency")
@@ -487,7 +483,9 @@ class PaymentService:
             if not tjs_selected:
                 raise AutomationError("Could not select TJS currency")
                 
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 5: Выбор способа перевода "Все карты"
             logger.info("📍 Step 5: Select 'Все карты' transfer method")
@@ -516,7 +514,9 @@ class PaymentService:
                 except:
                     continue
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Теперь ищем "Все карты" в открывшемся списке
             vse_karty_selectors = [
@@ -560,7 +560,9 @@ class PaymentService:
             if not vse_karty_selected:
                 logger.warning("⚠️ Could not select Все карты, continuing...")
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 6: Нажать кнопку "ПРОДОЛЖИТЬ"
             logger.info("📍 Step 6: Click 'ПРОДОЛЖИТЬ' button")
@@ -592,7 +594,12 @@ class PaymentService:
             if not continue_clicked:
                 logger.warning("⚠️ Could not find ПРОДОЛЖИТЬ button, continuing...")
             
-            await asyncio.sleep(5)  # Даем больше времени для загрузки основной формы
+            # ANTI-DETECTION: Human wait with behavior during form loading
+            logger.info("⏳ Waiting for main form to load with human behavior...")
+            HumanBehavior.wait_with_human_behavior(browser_manager.driver, 5.0)
+            
+            # ANTI-DETECTION: Simulate occasional page leave/return (5% chance)
+            BehavioralCamouflage.simulate_page_leave_return(browser_manager.driver, probability=0.05)
             
             # Шаг 7: Заполнение номера карты получателя
             logger.info("📍 Step 7: Fill recipient card number")
@@ -623,11 +630,15 @@ class PaymentService:
                             await asyncio.sleep(0.3)
                             
                             # Используем человечный ввод для номера карты
-                            success = await human_type_text(element, recipient_card, 0.05, 0.15)
-                            if success:
-                                logger.info("✅ Recipient card filled successfully")
+                            # ANTI-DETECTION: Human-like typing для номера карты
+                            try:
+                                HumanBehavior.human_type(element, recipient_card, browser_manager.driver)
+                                logger.info("✅ Recipient card filled successfully with human behavior")
                                 recipient_card_filled = True
                                 break
+                            except Exception as e:
+                                logger.error(f"❌ Failed to type recipient card: {e}")
+                                continue
                     except Exception as e:
                         logger.debug(f"Recipient card field filling failed: {e}")
                         continue
@@ -638,7 +649,9 @@ class PaymentService:
             if not recipient_card_filled:
                 logger.warning("⚠️ Could not fill recipient card, continuing...")
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 8: Заполнение паспортных данных отправителя
             logger.info("📍 Step 8: Fill sender passport data")
@@ -739,12 +752,16 @@ class PaymentService:
                                 await asyncio.sleep(0.2)
                                 
                                 # Заполняем человечным вводом
-                                success = await human_type_text(element, field['value'], 0.03, 0.08)
-                                if success:
-                                    logger.info(f"✅ {field['label']} filled successfully")
+                                # ANTI-DETECTION: Human-like typing для полей формы
+                                try:
+                                    HumanBehavior.human_type(element, field['value'], browser_manager.driver)
+                                    logger.info(f"✅ {field['label']} filled successfully with human behavior")
                                     field_filled = True
                                     fields_filled += 1
                                     break
+                                except Exception as e:
+                                    logger.error(f"❌ Failed to type {field['label']}: {e}")
+                                    continue
                         except Exception as e:
                             logger.debug(f"{field['name']} field filling failed: {e}")
                             continue
@@ -758,35 +775,65 @@ class PaymentService:
                 await asyncio.sleep(0.5)  # Небольшая пауза между полями
             
             logger.info(f"📊 Passport data: filled {fields_filled}/{len(passport_fields)} fields")
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
-            # Шаг 9: Принятие условий (checkbox) - КАК В СТАРОЙ СИСТЕМЕ
+            # Шаг 9: Принятие условий (checkbox) - КАК В СТАРОЙ СИСТЕМЕ + ANTI-DETECTION
             logger.info("📍 Step 9: Accept terms checkbox")
             
-            await asyncio.sleep(0.3)
+            # ANTI-DETECTION: Reading simulation before checkbox action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # СТАРЫЙ УСПЕШНЫЙ ПОДХОД: Простой поиск всех чекбоксов
             checkboxes = await browser_manager.find_elements_safe(By.XPATH, "//input[@type='checkbox']")
             checkbox_checked = False
             
-            for cb in checkboxes:
+            # ANTI-DETECTION: Simulate hesitation when multiple checkboxes available
+            if len(checkboxes) > 1:
+                selected_checkbox = BehavioralCamouflage.simulate_field_selection_hesitation(browser_manager.driver, checkboxes)
+            else:
+                selected_checkbox = checkboxes[0] if checkboxes else None
+            
+            if selected_checkbox:
                 try:
-                    # Принудительный клик через JavaScript (КАК В СТАРОЙ СИСТЕМЕ)
-                    browser_manager.driver.execute_script("arguments[0].click();", cb)
-                    if cb.is_selected():
-                        logger.info("✅ Step 9: Agreement checkbox checked")
+                    # ANTI-DETECTION: Simulate human-like click with preparation
+                    HumanBehavior.human_click_with_preparation(browser_manager.driver, selected_checkbox)
+                    
+                    # Fallback to JS click if human click fails
+                    if not selected_checkbox.is_selected():
+                        browser_manager.driver.execute_script("arguments[0].click();", selected_checkbox)
+                    
+                    if selected_checkbox.is_selected():
+                        logger.info("✅ Step 9: Agreement checkbox checked with human behavior")
                         checkbox_checked = True
-                        break
-                except:
-                    continue
+                except Exception as e:
+                    logger.warning(f"Human click failed, falling back to JS: {e}")
+                    # Original fallback method
+                    for cb in checkboxes:
+                        try:
+                            browser_manager.driver.execute_script("arguments[0].click();", cb)
+                            if cb.is_selected():
+                                logger.info("✅ Step 9: Agreement checkbox checked (fallback)")
+                                checkbox_checked = True
+                                break
+                        except:
+                            continue
             
             if not checkbox_checked:
                 logger.warning("⚠️ Could not find or check terms checkbox, continuing...")
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 10: Отправка основной формы
             logger.info("📍 Step 10: Submit main form")
+            
+            # ANTI-DETECTION: Simulate uncertainty before final submission
+            if random.random() < 0.3:  # 30% chance
+                BehavioralCamouflage.simulate_uncertainty(browser_manager.driver)
             
             # ИСПОЛЬЗУЕМ УСПЕШНЫЙ ПОДХОД ИЗ STEP 6: поиск всех кнопок
             all_buttons = await browser_manager.find_elements_safe(By.TAG_NAME, "button")
@@ -800,8 +847,17 @@ class PaymentService:
                         logger.info(f"🎯 Found submit button: '{text}'")
                         await asyncio.sleep(random.uniform(0.5, 1.0))
                         
+                        # ANTI-DETECTION: Simulate wrong click occasionally
+                        if random.random() < 0.15:  # 15% chance
+                            # Try to find nearby buttons for wrong click simulation
+                            nearby_buttons = [b for b in all_buttons if b != btn][:3]
+                            BehavioralCamouflage.simulate_wrong_click(browser_manager.driver, btn, nearby_buttons)
+                        else:
+                            # Normal human click with preparation
+                            HumanBehavior.human_click_with_preparation(browser_manager.driver, btn)
+                        
                         if await browser_manager.click_element_safe(btn):
-                            logger.info(f"✅ Successfully submitted form via button: '{text}'")
+                            logger.info(f"✅ Successfully submitted form via button: '{text}' (with human behavior)")
                             form_submitted = True
                             break
                         else:
@@ -817,8 +873,9 @@ class PaymentService:
             if not form_submitted:
                 logger.warning("⚠️ Could not find or click submit button, continuing...")
             
-            # Ждем после отправки формы для обработки ответа
-            await asyncio.sleep(5)
+            # ANTI-DETECTION: Human wait with behavior after form submission
+            logger.info("⏳ Waiting for form processing with human behavior...")
+            HumanBehavior.wait_with_human_behavior(browser_manager.driver, 5.0)
             
             # Шаг 11: Решение CAPTCHA (если появится) - ИСПРАВЛЕНО как в legacy режиме
             logger.info("📍 Step 11: Solve CAPTCHA (if present)")
@@ -859,7 +916,9 @@ class PaymentService:
                 # ИСПРАВЛЕНО: Перебрасываем ошибку как в legacy режиме
                 raise
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Step 12 уже выполнен в CAPTCHA блоке выше - пропускаем дублирование
             
@@ -872,7 +931,9 @@ class PaymentService:
             else:
                 logger.warning("⚠️ Step 13: Could not find final continue button, proceeding...")
             
-            await asyncio.sleep(3)
+            # ANTI-DETECTION: Human reading pause before action
+            reading_delay = HumanBehavior.reading_pause()
+            await asyncio.sleep(reading_delay)
             
             # Шаг 14: Получение QR-кода/ссылки результата (адаптировано из legacy)
             logger.info("📍 Step 14: Extract payment result (QR code/URL)")
@@ -1258,7 +1319,10 @@ class PaymentService:
                             try:
                                 driver.execute_script("arguments[0].click();", button)
                                 logger.info("✅ КЛИК: JavaScript клик выполнен")
-                                await asyncio.sleep(3)  # Увеличиваем задержку для JS клика
+                                
+                                # ANTI-DETECTION: Human reading pause before action
+                                reading_delay = HumanBehavior.reading_pause()
+                                await asyncio.sleep(reading_delay)  # Увеличиваем задержку для JS клика
                                 
                                 url_after_js = driver.current_url
                                 logger.info(f"📍 URL ПОСЛЕ JS клика: {url_after_js}")

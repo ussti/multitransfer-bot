@@ -23,6 +23,7 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from core.proxy.manager import ProxyManager
 from core.proxy.manager import ProxyInfo
 from web.captcha.solver import CaptchaSolver
+from web.anti_detection import HumanBehavior, StealthBrowser, BehavioralCamouflage
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,14 @@ class BrowserManager:
                 self.driver.implicitly_wait(self.implicit_wait)
                 self.driver.set_page_load_timeout(self.page_load_timeout)
                 
+                # ===== ПРИМЕНЯЕМ STEALTH НАСТРОЙКИ ПОСЛЕ СОЗДАНИЯ DRIVER =====
+                logger.info("🚀 Applying full stealth mode")
+                StealthBrowser.setup_full_stealth_mode(self.driver)
+                
+                # Проверяем эффективность stealth
+                stealth_results = StealthBrowser.verify_stealth_setup(self.driver)
+                logger.info(f"🎯 Stealth effectiveness: {stealth_results.get('stealth_score', 'unknown')}")
+                
                 # Configure Anti-Captcha plugin if loaded
                 if self.plugin_loaded:
                     await self._configure_anticaptcha_plugin()
@@ -247,8 +256,11 @@ class BrowserManager:
         return False
     
     def _create_chrome_options(self, proxy: Optional[ProxyInfo] = None) -> Options:
-        """Create Chrome options with proxy, stealth settings, and Anti-Captcha plugin"""
-        chrome_options = Options()
+        """Create Chrome options with STEALTH settings, proxy, and Anti-Captcha plugin"""
+        
+        # ===== НАЧИНАЕМ СО STEALTH НАСТРОЕК =====
+        logger.info("🛡️ Creating stealth Chrome options")
+        chrome_options = StealthBrowser.get_stealth_options()
         
         # Basic browser settings
         # In production with Xvfb, we run non-headless for plugin support
@@ -260,9 +272,11 @@ class BrowserManager:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument(f"--window-size={self.window_size}")
         
-        # User agent
-        user_agent = random.choice(self.user_agents)
-        chrome_options.add_argument(f"--user-agent={user_agent}")
+        # Stealth уже добавил свой User-Agent, но можем переопределить
+        if hasattr(self, 'user_agents') and self.user_agents:
+            user_agent = random.choice(self.user_agents)
+            chrome_options.add_argument(f"--user-agent={user_agent}")
+            logger.debug(f"🎭 Overriding with custom User-Agent: {user_agent[:50]}...")
         
         # Proxy configuration - SIMPLIFIED APPROACH
         if proxy:
@@ -309,10 +323,8 @@ class BrowserManager:
                 chrome_options.add_argument("--allow-running-insecure-content")
                 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
                 
-                # REMOVE PROBLEMATIC OPTIONS FOR MACOS
-                # These options cause issues with undetected-chromedriver on macOS
-                # chrome_options.add_experimental_option("excludeSwitches", ["--disable-extensions", "--enable-automation"])
-                # chrome_options.add_experimental_option('useAutomationExtension', False)
+                # СОВМЕСТИМОСТЬ С MACOS: Не используем проблемные опции
+                # excludeSwitches и useAutomationExtension не поддерживаются в некоторых версиях
                 
                 # Используем только необходимые prefs
                 prefs = {
